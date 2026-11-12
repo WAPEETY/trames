@@ -16,13 +16,17 @@ jobs:
   test:
     runs-on: docker
     container:
-      image: ghcr.io/cirruslabs/flutter:3.47.2
+      # Flutter + Android SDK, one tag per Flutter release. Bump with Flutter.
+      image: ghcr.io/gmeligio/flutter-android:3.50.0
+      # Root: the runner's workspace volume isn't writable by the image's
+      # user, and tools/ci/setup.sh installs packages.
+      options: --user root
     steps:
       - name: Checkout
-        # No actions/checkout: the Flutter image has no Node. Full history and
+        # No actions/checkout: the image has no Node. Full history and
         # tags are needed for the version code.
         run: |
-          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory '*'
           git init -q .
           url="${{ github.server_url }}/${{ github.repository }}.git"
           git remote add origin "${url/:\/\//://ci:${{ github.token }}@}"
@@ -38,19 +42,25 @@ jobs:
     needs: test
     runs-on: docker
     container:
-      image: ghcr.io/cirruslabs/flutter:3.47.2
+      # Flutter + Android SDK, one tag per Flutter release. Bump with Flutter.
+      image: ghcr.io/gmeligio/flutter-android:3.50.0
+      # Root: the runner's workspace volume isn't writable by the image's
+      # user, and tools/ci/setup.sh installs packages.
+      options: --user root
     steps:
       - name: Checkout
-        # No actions/checkout: the Flutter image has no Node. Full history and
+        # No actions/checkout: the image has no Node. Full history and
         # tags are needed for the version code.
         run: |
-          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory '*'
           git init -q .
           url="${{ github.server_url }}/${{ github.repository }}.git"
           git remote add origin "${url/:\/\//://ci:${{ github.token }}@}"
           git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
           git checkout -q --detach "${{ github.sha }}"
           git log -1 --oneline
+      - name: Setup (JDK 21, jq)
+        run: tools/ci/setup.sh
       - run: flutter pub get
       - name: Release signing
         run: tools/ci/signing.sh
