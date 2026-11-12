@@ -6,7 +6,8 @@
 - **main**: only ever fast-forwarded from devel by `just release`; no workflow
   of its own, since every release tag is tested and built anyway.
 - **tags** `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, `vX.Y.Z`: the `release` workflow
-  builds the signed APK and publishes it to Forgejo releases (alpha/beta as
+  builds signed per-ABI APKs (arm64-v8a, armeabi-v7a, x86_64) and publishes
+  them to Forgejo releases (alpha/beta as
   prereleases) with a changelog from the commit messages.
 
 Start a release with `just`:

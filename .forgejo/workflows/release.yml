@@ -49,15 +49,19 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: Version
         run: tools/ci/version.sh "${{ github.ref_type }}" "${{ github.ref_name }}"
-      - name: Build APK
-        run: flutter build apk --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
+      - name: Build APKs
+        # One APK per ABI (smaller downloads). Flutter adds 1000 * ABI to the
+        # versionCode (armeabi-v7a 1, arm64-v8a 2, x86_64 3).
+        run: flutter build apk --release --split-per-abi --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
       - name: Publish
         env:
           API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
           TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
           TAG: ${{ github.ref_name }}
         run: |
-          apk="trames-$VERSION_NAME.apk"
-          cp build/app/outputs/flutter-apk/app-release.apk "$apk"
-          sha256sum "$apk" > "$apk.sha256"
-          tools/ci/publish-release.sh "$apk" "$apk.sha256"
+          mkdir dist
+          for abi in arm64-v8a armeabi-v7a x86_64; do
+            cp "build/app/outputs/flutter-apk/app-$abi-release.apk" "dist/trames-$VERSION_NAME-$abi.apk"
+          done
+          (cd dist && sha256sum *.apk > SHA256SUMS)
+          tools/ci/publish-release.sh dist/*
