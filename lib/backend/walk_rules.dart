@@ -6,7 +6,7 @@ const kWalkingSpeedKmh = 6.0;
 class WalkPolicy {
   const WalkPolicy({
     this.shortRide = const Duration(minutes: 4),
-    this.shortRideSlack = const Duration(minutes: 2),
+    this.shortRideSlack = const Duration(minutes: 1),
     this.maxWalkKm = 3,
     this.suggestWalkMax = const Duration(minutes: 25),
     this.suggestWalkSlack = const Duration(minutes: 3),
@@ -50,12 +50,18 @@ class WalkPolicy {
     required DateTime rideArrival,
     required DateTime walkArrival,
   }) {
-    if (!walkArrival.isAfter(rideArrival)) return true; // walking is simply faster
-    return rideDuration <= shortRide && !walkArrival.isAfter(rideArrival.add(shortRideSlack));
+    if (!walkArrival.isAfter(rideArrival))
+      return true; // walking is simply faster
+    return rideDuration <= shortRide &&
+        !walkArrival.isAfter(rideArrival.add(shortRideSlack));
   }
 
   /// Rule 2: suggest walking the whole way?
-  bool suggestWalking({required Duration walk, required DateTime walkArrival, required DateTime? bestTransitArrival}) {
+  bool suggestWalking({
+    required Duration walk,
+    required DateTime walkArrival,
+    required DateTime? bestTransitArrival,
+  }) {
     if (walk > suggestWalkMax) return false;
     if (bestTransitArrival == null) return true;
     return !walkArrival.isAfter(bestTransitArrival.add(suggestWalkSlack));
