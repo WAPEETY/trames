@@ -1,4 +1,7 @@
 // Live: a tapped pin shows only its own stop (one direction).
+@Tags(['live'])
+library;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:roma_transit/backend/backend.dart';

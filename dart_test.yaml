@@ -1,0 +1,5 @@
+# Tests under test/live hit real network services; CI skips them with
+# `flutter test --exclude-tags live`. Run them with `just test-live`.
+tags:
+  live:
+    timeout: 2x

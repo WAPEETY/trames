@@ -1,4 +1,7 @@
 // Live regression: the direct 88 Verano -> Conca d'Oro must be offered.
+@Tags(['live'])
+library;
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:roma_transit/backend/backend.dart';

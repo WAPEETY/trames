@@ -1,0 +1,65 @@
+# Tests on every push to devel/main and on pull requests.
+# Pushes to main also build a signed release APK, so a broken release build
+# or missing signing secret shows up before you tag.
+name: ci
+
+on:
+  push:
+    branches: [devel, main]
+  pull_request:
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  test:
+    runs-on: docker
+    container:
+      image: ghcr.io/cirruslabs/flutter:3.47.2
+    steps:
+      - name: Checkout
+        # No actions/checkout: the Flutter image has no Node. Full history and
+        # tags are needed for the version code.
+        run: |
+          git config --global --add safe.directory "$PWD"
+          git init -q .
+          url="${{ github.server_url }}/${{ github.repository }}.git"
+          git remote add origin "${url/:\/\//://ci:${{ github.token }}@}"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git checkout -q --detach "${{ github.sha }}"
+          git log -1 --oneline
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test --exclude-tags live
+
+  build:
+    if: github.ref == 'refs/heads/main'
+    needs: test
+    runs-on: docker
+    container:
+      image: ghcr.io/cirruslabs/flutter:3.47.2
+    steps:
+      - name: Checkout
+        # No actions/checkout: the Flutter image has no Node. Full history and
+        # tags are needed for the version code.
+        run: |
+          git config --global --add safe.directory "$PWD"
+          git init -q .
+          url="${{ github.server_url }}/${{ github.repository }}.git"
+          git remote add origin "${url/:\/\//://ci:${{ github.token }}@}"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git checkout -q --detach "${{ github.sha }}"
+          git log -1 --oneline
+      - run: flutter pub get
+      - name: Release signing
+        run: tools/ci/signing.sh
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Version
+        run: tools/ci/version.sh "${{ github.ref_type }}" "${{ github.ref_name }}"
+      - name: Build APK
+        run: flutter build apk --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"

@@ -1,0 +1,57 @@
+# Pushing a tag vX.Y.Z[-alpha.N|-beta.N] (see `just release`) builds the signed
+# APK and publishes it as a Forgejo release. alpha/beta are marked prerelease.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: docker
+    container:
+      image: ghcr.io/cirruslabs/flutter:3.47.2
+    steps:
+      - name: Checkout
+        # No actions/checkout: the Flutter image has no Node. Full history and
+        # tags are needed for the version code.
+        run: |
+          git config --global --add safe.directory "$PWD"
+          git init -q .
+          url="${{ github.server_url }}/${{ github.repository }}.git"
+          git remote add origin "${url/:\/\//://ci:${{ github.token }}@}"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git checkout -q --detach "${{ github.sha }}"
+          git log -1 --oneline
+      - name: Tag must be on main
+        run: |
+          git merge-base --is-ancestor HEAD origin/main ||
+            { echo "::error::${{ github.ref_name }} is not on main"; exit 1; }
+      - run: flutter pub get
+      - run: flutter analyze
+      - run: flutter test --exclude-tags live
+      - name: Release signing
+        run: tools/ci/signing.sh
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Version
+        run: tools/ci/version.sh "${{ github.ref_type }}" "${{ github.ref_name }}"
+      - name: Build APK
+        run: flutter build apk --release --build-name="$VERSION_NAME" --build-number="$VERSION_CODE"
+      - name: Publish
+        env:
+          API: ${{ github.server_url }}/api/v1/repos/${{ github.repository }}
+          TOKEN: ${{ secrets.RELEASE_TOKEN || github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          apk="trames-$VERSION_NAME.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "$apk"
+          sha256sum "$apk" > "$apk.sha256"
+          tools/ci/publish-release.sh "$apk" "$apk.sha256"
