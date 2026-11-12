@@ -1,5 +1,6 @@
 # Analyze + offline tests on devel and pull requests. main only moves via
-# `just release`, and the release workflow tests and builds every tag.
+# `just release`, which only tags commits that passed here; the release
+# workflow just builds.
 name: ci
 
 on:

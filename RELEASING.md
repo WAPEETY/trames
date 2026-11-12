@@ -3,6 +3,7 @@
 ## Flow
 
 - **devel** and pull requests: `flutter analyze` + offline tests (`ci` workflow).
+  Releases are only cut from commits where it passed.
 - **main**: only ever fast-forwarded from devel by `just release`; no workflow
   of its own, since every release tag is tested and built anyway.
 - **tags** `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, `vX.Y.Z`: the `release` workflow
@@ -24,8 +25,7 @@ The script refuses to go backwards (beta -> alpha of the same version), to tag
 the same commit twice on one channel, to release unpushed devel commits, or to
 release a commit whose `ci` workflow hasn't passed (it asks Forgejo; set
 `FORGEJO_TOKEN` if the repo is private, `--no-ci-check` to skip). The release
-workflow runs analyze and tests again before building, so a failing tag never
-publishes APKs.
+workflow doesn't test again: it only builds and publishes.
 
 ## Versions
 

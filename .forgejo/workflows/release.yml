@@ -37,9 +37,9 @@ jobs:
         run: |
           git merge-base --is-ancestor HEAD origin/main ||
             { echo "::error::${{ github.ref_name }} is not on main"; exit 1; }
+      # No analyze/tests here: `just release` only tags commits whose `ci`
+      # workflow passed.
       - run: flutter pub get
-      - run: flutter analyze
-      - run: flutter test --exclude-tags live
       - name: Release signing
         run: tools/ci/signing.sh
         env:
