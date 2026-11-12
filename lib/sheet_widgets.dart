@@ -137,6 +137,16 @@ class Countdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final m = minutesUntil(departure.time);
+    // Timetable only: the clock time, as on a printed timetable (a countdown
+    // would suggest a precision the timetable doesn't have).
+    if (certainty == Certainty.scheduled) {
+      return Semantics(
+        label: 'at ${hm(departure.time)}, scheduled',
+        excludeSemantics: true,
+        child: Text(hm(departure.time),
+            style: emphasized(context).headlineSmall.copyWith(color: certaintyColor(context, certainty), height: 1)),
+      );
+    }
     return Semantics(
       label: '${m <= 0 ? 'now' : 'in $m minutes'}, ${describeCertainty(certainty)}',
       excludeSemantics: true,
