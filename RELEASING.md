@@ -2,9 +2,9 @@
 
 ## Flow
 
-- **devel**: every push runs `flutter analyze` + offline tests (`ci` workflow).
-- **main**: only ever fast-forwarded from devel. Pushes run tests and a signed
-  release build, so problems show up before a tag.
+- **devel** and pull requests: `flutter analyze` + offline tests (`ci` workflow).
+- **main**: only ever fast-forwarded from devel by `just release`; no workflow
+  of its own, since every release tag is tested and built anyway.
 - **tags** `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, `vX.Y.Z`: the `release` workflow
   builds the signed APK and publishes it to Forgejo releases (alpha/beta as
   prereleases) with a changelog from the commit messages.
@@ -27,7 +27,7 @@ the same commit twice on one channel, or to release unpushed devel commits.
 Nothing is committed for a release; `version:` in `pubspec.yaml` only matters
 for local builds. CI derives:
 
-- versionName: the tag without `v` (untagged main builds: `git describe`)
+- versionName: the tag without `v`
 - versionCode: `commits on HEAD * 10 + channel` (alpha 1, beta 2, stable 3),
   always increasing because main only fast-forwards.
 
