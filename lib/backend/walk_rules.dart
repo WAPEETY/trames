@@ -50,8 +50,9 @@ class WalkPolicy {
     required DateTime rideArrival,
     required DateTime walkArrival,
   }) {
-    if (!walkArrival.isAfter(rideArrival))
+    if (!walkArrival.isAfter(rideArrival)) {
       return true; // walking is simply faster
+    }
     return rideDuration <= shortRide &&
         !walkArrival.isAfter(rideArrival.add(shortRideSlack));
   }

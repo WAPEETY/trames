@@ -21,7 +21,11 @@ just promote stable         # tag current main as-is, e.g. ship the tested beta
 ```
 
 The script refuses to go backwards (beta -> alpha of the same version), to tag
-the same commit twice on one channel, or to release unpushed devel commits.
+the same commit twice on one channel, to release unpushed devel commits, or to
+release a commit whose `ci` workflow hasn't passed (it asks Forgejo; set
+`FORGEJO_TOKEN` if the repo is private, `--no-ci-check` to skip). The release
+workflow runs analyze and tests again before building, so a failing tag never
+publishes APKs.
 
 ## Versions
 

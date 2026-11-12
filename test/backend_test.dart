@@ -1,7 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:roma_transit/backend/backend.dart';
-import 'package:roma_transit/backend/models.dart';
 import 'package:roma_transit/backend/motis.dart';
 
 void main() {
