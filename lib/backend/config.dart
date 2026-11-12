@@ -32,6 +32,7 @@ TransitBackend createBackend({CityConfig? city}) {
     paths: _motis,
     trips: _motis,
     walks: _motis,
+    returns: _motis,
   );
 }
 

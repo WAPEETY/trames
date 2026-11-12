@@ -144,6 +144,7 @@ class Leg {
     this.arrivalDelaySeconds,
     this.intermediateStops = 0,
     this.alternatives = const [],
+    this.origin,
   });
 
   /// WALK, BUS, TRAM, SUBWAY, RAIL, ...
@@ -175,6 +176,9 @@ class Leg {
   final int intermediateStops;
   final List<LegAlternative> alternatives;
 
+  /// Where the ride's trip starts (its terminus), when the planner says.
+  final TripOrigin? origin;
+
   Duration get duration => end.difference(start);
 
   /// Same leg moved in time (used to re-time walks when a ride is swapped).
@@ -204,6 +208,7 @@ class Leg {
       arrivalDelaySeconds: arrivalDelaySeconds,
       intermediateStops: intermediateStops,
       alternatives: alternatives ?? this.alternatives,
+      origin: origin,
     );
   }
 }
@@ -238,8 +243,15 @@ class Stop {
 String stopCodeFromId(String id) => id.split(RegExp(r'[_:]')).last;
 
 class Departure {
-  Departure({required this.time, required this.realtime, this.delaySeconds, this.tripId, this.backendTripId});
+  Departure({required this.time, required this.realtime, this.delaySeconds, this.tripId, this.backendTripId, this.origin});
   final DateTime time;
+
+  /// Where this trip starts (its terminus), when the backend says.
+  final TripOrigin? origin;
+
+  /// Same departure at another time (an estimate, see [ReturnEstimate]).
+  Departure at(DateTime t) =>
+      Departure(time: t, realtime: realtime, delaySeconds: delaySeconds, tripId: tripId, backendTripId: backendTripId, origin: origin);
   final bool realtime;
   final int? delaySeconds;
   final String? tripId;
@@ -306,18 +318,45 @@ class Vehicle {
   final double? bearing;
 }
 
-/// How sure we are that a departure will actually come, from its live data:
-///  * [scheduled]: timetable only;
+/// How sure we are that a departure will actually come, least sure first
+/// (so the lowest index of several is the weakest link):
+///  * [scheduled]: timetable only, no bus in sight;
+///  * [estimated]: timetable only, and the bus that should run it comes back
+///    from the other direction too late: its time is our estimate;
+///  * [returning]: timetable only, and a bus coming back from the other
+///    direction should make it in time;
 ///  * [waiting]: live forecast, but its bus hasn't started the trip yet
 ///    (parked at the terminus, or no bus on it yet);
 ///  * [moving]: its bus is on the way.
-enum Certainty { scheduled, waiting, moving }
+enum Certainty { scheduled, estimated, returning, waiting, moving }
+
+/// Where a trip starts: its first stop (the terminus).
+class TripOrigin {
+  const TripOrigin({required this.stopId, required this.position});
+  final String stopId;
+  final LatLng position;
+}
+
+/// A timetable-only trip that a bus coming back from the other direction
+/// could run ([Certainty.returning]), or run late ([Certainty.estimated]:
+/// [delay] after the timetable, at every stop).
+class ReturnEstimate {
+  const ReturnEstimate(this.certainty, {this.delay = Duration.zero});
+  final Certainty certainty;
+  final Duration delay;
+}
 
 /// [realtime]: the time is a live forecast. [vehicles]: live buses by trip
 /// id, or null without a GPS feed (then a live time counts as [moving], as
-/// there's no way to tell). [tripId]: the raw GTFS trip id.
-Certainty certaintyOf({required bool realtime, required String? tripId, required Map<String, Vehicle>? vehicles}) {
-  if (!realtime) return Certainty.scheduled;
+/// there's no way to tell). [tripId]: the raw GTFS trip id. [returns]: what
+/// [ReturnEstimator] found for timetable-only trips.
+Certainty certaintyOf({
+  required bool realtime,
+  required String? tripId,
+  required Map<String, Vehicle>? vehicles,
+  Map<String, ReturnEstimate>? returns,
+}) {
+  if (!realtime) return (tripId == null ? null : returns?[tripId])?.certainty ?? Certainty.scheduled;
   if (vehicles == null) return Certainty.moving;
   final v = tripId == null ? null : vehicles[tripId];
   return v != null && v.started ? Certainty.moving : Certainty.waiting;
@@ -337,12 +376,15 @@ String walkKey(LatLng a, LatLng b) =>
 
 /// One stop of a trip, with its (live when available) time there.
 class TripStop {
-  TripStop({required this.name, required this.position, this.time, this.scheduled, this.stopId});
+  TripStop({required this.name, required this.position, this.time, this.scheduled, this.stopId, this.live = false});
   final String name;
   final LatLng position;
   final DateTime? time;
   final DateTime? scheduled;
   final String? stopId;
+
+  /// [time] is a live prediction (else the timetable).
+  final bool live;
 
   int? get delaySeconds => time == null || scheduled == null ? null : time!.difference(scheduled!).inSeconds;
 }

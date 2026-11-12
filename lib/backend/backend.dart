@@ -92,6 +92,43 @@ abstract interface class VehicleFeed {
   Future<VehicleSnapshot> vehicles();
 }
 
+/// What [ReturnEstimator] needs from a backend.
+abstract interface class ReturnSource {
+  /// Trips leaving [stopId] (a terminus) from now on, any line.
+  Future<List<TerminusRun>> departuresFrom(String stopId);
+
+  /// Where and when the trip [v] is running ends, best estimate (live where
+  /// known); null when the backend doesn't know the trip.
+  Future<TripEnd?> tripEnd(Vehicle v);
+}
+
+/// A trip leaving its first stop.
+class TerminusRun {
+  const TerminusRun({
+    required this.tripId,
+    required this.line,
+    required this.scheduled,
+    required this.realtime,
+    this.directionId,
+  });
+
+  /// Raw GTFS trip id.
+  final String tripId;
+  final String line;
+
+  /// Timetabled departure from the terminus.
+  final DateTime scheduled;
+  final bool realtime;
+  final int? directionId;
+}
+
+/// Last stop of a running trip and when the bus should get there.
+class TripEnd {
+  const TripEnd({required this.position, required this.time});
+  final LatLng position;
+  final DateTime time;
+}
+
 class TransitBackend {
   const TransitBackend({
     required this.name,
@@ -103,6 +140,7 @@ class TransitBackend {
     this.paths,
     this.trips,
     this.walks,
+    this.returns,
   });
 
   final String name;
@@ -123,6 +161,9 @@ class TransitBackend {
 
   /// Optional: street walking routes, to offer walking instead of short rides.
   final WalkRouter? walks;
+
+  /// Optional: buses coming back from the other direction (needs [vehicles]).
+  final ReturnSource? returns;
 }
 
 /// Shared helpers for implementations.
@@ -180,6 +221,22 @@ List<BoardRow> boardPerDeparture(List<BoardRow> rows) => [
       for (final r in rows)
         for (final d in r.next) BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: [d]),
     ]..sort((a, b) => a.next.first.time.compareTo(b.next.first.time));
+
+/// Moves departures the app estimated itself ([Certainty.estimated]) to
+/// their estimated time; rows stay soonest first.
+List<BoardRow> applyReturnEstimates(List<BoardRow> rows, Map<String, ReturnEstimate> returns) {
+  if (returns.isEmpty) return rows;
+  return [
+    for (final r in rows)
+      BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: [
+        for (final d in r.next)
+          if (returns[d.tripId] case ReturnEstimate(certainty: Certainty.estimated, :final delay) when !d.realtime)
+            d.at(d.time.add(delay))
+          else
+            d,
+      ]..sort((a, b) => a.time.compareTo(b.time))),
+  ];
+}
 
 /// Orders search results for someone at [reference]: everything within
 /// [localKm] first, in the backend's own relevance order (name match), then

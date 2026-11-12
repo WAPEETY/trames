@@ -10,6 +10,7 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 import 'backend/backend.dart';
 import 'backend/config.dart';
 import 'backend/motis.dart' show MotisClient;
+import 'backend/returning.dart';
 import 'backend/route_search.dart';
 import 'backend/trip_variants.dart';
 import 'attribution.dart';
@@ -90,9 +91,48 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// How sure a live time is: is its bus on the way, or not departed yet.
-  Certainty _certainty(bool realtime, String? tripId) =>
-      certaintyOf(realtime: realtime, tripId: tripId, vehicles: liveVehicles);
+  /// Timetable-only departures a bus coming back from the other direction
+  /// could run (see ReturnEstimator): for the stop board and for the routes.
+  Map<String, ReturnEstimate> boardReturns = {};
+  Map<String, ReturnEstimate> routeReturns = {};
+
+  /// Board rows as fetched (before estimates), to rebuild [nearby].
+  List<BoardRow> _boardRows = [];
+
+  /// How sure a time is: bus on the way, not departed yet, a bus coming back
+  /// around, or timetable only.
+  Certainty _certainty(bool realtime, String? tripId) => certaintyOf(
+        realtime: realtime,
+        tripId: tripId,
+        vehicles: liveVehicles,
+        returns: to != null ? routeReturns : boardReturns,
+      );
+
+  /// Looks for buses coming back to run timetable-only departures: one
+  /// query per line and terminus, soonest departures first. Empty where the
+  /// city has no GPS feed.
+  Future<Map<String, ReturnEstimate>> _estimateReturns(
+      Iterable<(String line, Departure departure)> scheduled, Map<String, Vehicle>? vehicles) async {
+    final source = backend.returns;
+    if (source == null || vehicles == null) return const {};
+    final soonest = scheduled.where((e) => !e.$2.realtime && e.$2.origin != null).toList()
+      ..sort((a, b) => a.$2.time.compareTo(b.$2.time));
+    return ReturnEstimator(source).estimate([for (final (line, d) in soonest) ReturnQuery(line, d.origin!)], vehicles);
+  }
+
+  /// [nearby] from the fetched rows and the estimates: purple times moved to
+  /// the estimate; one stop lists every bus, nearby one row per line +
+  /// direction (from whichever stop has it soonest).
+  List<BoardRow> _buildNearby() {
+    final rows = applyReturnEstimates(_boardRows, boardReturns);
+    if (filterStop != null) return boardPerDeparture(rows);
+    final best = <String, BoardRow>{};
+    for (final r in rows) {
+      final k = '${r.line}|${r.headsign}';
+      if (!best.containsKey(k) || r.next.first.time.isBefore(best[k]!.next.first.time)) best[k] = r;
+    }
+    return best.values.toList()..sort((a, b) => a.next.first.time.compareTo(b.next.first.time));
+  }
   List<Stop> nearbyStops = [];
   final Map<String, Stop> stopById = {};
   bool nearbyLoading = true;
@@ -259,25 +299,28 @@ class _HomePageState extends State<HomePage> {
       final vehicles = await running;
       if (seq != _areaSeq || !mounted) return;
       final rows = dropPassedDepartures(boards.expand((b) => b).toList(), vehicles?.keys.toSet() ?? const {});
-      // One stop: every bus on its own row. Nearby: one row per line +
-      // direction, from whichever stop has it soonest.
-      final best = <String, BoardRow>{};
-      for (final r in rows) {
-        final k = '${r.line}|${r.headsign}';
-        if (!best.containsKey(k) || r.next.first.time.isBefore(best[k]!.next.first.time)) best[k] = r;
-      }
       setState(() {
         nearbyStops = pins;
         liveVehicles = vehicles;
         stopById
           ..clear()
           ..addEntries(pins.map((s) => MapEntry(s.id, s)));
-        nearby = filterStop != null
-            ? boardPerDeparture(rows)
-            : (best.values.toList()..sort((a, b) => a.next.first.time.compareTo(b.next.first.time)));
+        _boardRows = rows;
+        // Keep the last estimates for trips still listed until the new ones
+        // arrive (no flicker back to grey on every refresh).
+        final listed = {for (final r in rows) for (final d in r.next) d.tripId};
+        boardReturns = {for (final e in boardReturns.entries) if (listed.contains(e.key)) e.key: e.value};
+        nearby = _buildNearby();
         error = null;
       });
       _drawNearbyStops();
+      // Then buses coming back from the other direction (a few requests).
+      final returns = await _estimateReturns([for (final r in rows) for (final d in r.next) (r.line, d)], vehicles);
+      if (seq != _areaSeq || !mounted) return;
+      setState(() {
+        boardReturns = returns;
+        nearby = _buildNearby();
+      });
     } catch (e) {
       if (mounted && !silent && seq == _areaSeq) setState(() => error = '$e');
     } finally {
@@ -331,12 +374,27 @@ class _HomePageState extends State<HomePage> {
       final vehicles = _fetchVehicles();
       final list = await routeSearch.search(from.position, dest.position);
       final live = await vehicles;
-      if (mounted && to == dest) {
-        setState(() {
-          routes = list;
-          liveVehicles = live;
-        });
-      }
+      if (!mounted || to != dest) return;
+      setState(() {
+        routes = list;
+        liveVehicles = live;
+      });
+      // Then buses coming back for timetable-only rides (red). Purple (our
+      // own time estimate) isn't applied to routes yet: they stay grey.
+      final returns = await _estimateReturns([
+        for (final g in list)
+          for (final it in g.options)
+            for (final l in it.transitLegs)
+              (
+                l.routeShortName ?? l.mode,
+                Departure(time: l.start, realtime: l.realtime, tripId: l.tripId, origin: l.origin),
+              ),
+      ], live);
+      if (!mounted || to != dest) return;
+      setState(() => routeReturns = {
+            for (final e in returns.entries)
+              if (e.value.certainty == Certainty.returning) e.key: e.value,
+          });
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -1184,6 +1242,10 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// A route goes under Live when its first ride is backed by a real bus.
+  bool _routeLive(RouteGroup g) =>
+      g.isLive || g.best.transitLegs.take(1).any((l) => _certainty(l.realtime, l.tripId) != Certainty.scheduled);
+
   /// Like [_certainty], from the buses the tracker follows (trip and line
   /// views, polled live): a followed trip with no bus yet is waiting.
   Certainty _trackedCertainty(bool realtime, String? tripId) => certaintyOf(
@@ -1192,6 +1254,7 @@ class _HomePageState extends State<HomePage> {
         vehicles: backend.vehicles == null || tracker.lastError != null
             ? null
             : {for (final e in tracker.buses.entries) e.key: e.value.vehicle},
+        returns: routeReturns,
       );
 
   /// Zoomed out on the stops view: the sheet holds just the search bar.
@@ -1300,11 +1363,12 @@ class _HomePageState extends State<HomePage> {
           ),
         )
       else ...[
-        // Live first (next departure is a real-time prediction), then
-        // timetable-only; each keeps the soonest-first order.
+        // Live first (backed by a real bus: on its way, parked, or coming
+        // back around), then timetable-only; each keeps the soonest-first
+        // order.
         for (final (live, list) in [
-          (true, nearby.where((r) => r.next.first.realtime).toList()),
-          (false, nearby.where((r) => !r.next.first.realtime).toList()),
+          (true, nearby.where((r) => _certainty(r.next.first.realtime, r.next.first.tripId) != Certainty.scheduled).toList()),
+          (false, nearby.where((r) => _certainty(r.next.first.realtime, r.next.first.tripId) == Certainty.scheduled).toList()),
         ])
           if (list.isNotEmpty) ...[
             SliverToBoxAdapter(child: RouteSectionLabel(live: live, count: list.length)),
@@ -1352,8 +1416,8 @@ class _HomePageState extends State<HomePage> {
         // keeps the arrival order.
         for (final (label, list) in [
           (null, routes.where((g) => g.tags.contains(RouteTag.onFoot)).toList()),
-          ('live', routes.where((g) => !g.isWalk && g.isLive).toList()),
-          ('scheduled', routes.where((g) => !g.isWalk && !g.isLive).toList()),
+          ('live', routes.where((g) => !g.isWalk && _routeLive(g)).toList()),
+          ('scheduled', routes.where((g) => !g.isWalk && !_routeLive(g)).toList()),
           ('walk', routes.where((g) => g.isWalk && !g.tags.contains(RouteTag.onFoot)).toList()),
         ])
           if (list.isNotEmpty) ...[

@@ -35,6 +35,17 @@ void main() {
       expect(out.single.next.map((d) => d.tripId), ['a', 'notyet']);
     });
 
+    test('estimated departures move to their estimate, rows stay in order', () {
+      final out = boardPerDeparture(applyReturnEstimates([
+        row('3', [dep(2, 'late'), dep(6, 'red'), dep(9, 'next', live: true)]),
+      ], {
+        'late': const ReturnEstimate(Certainty.estimated, delay: Duration(minutes: 8)),
+        'red': const ReturnEstimate(Certainty.returning),
+      }));
+      expect(out.map((r) => r.next.single.tripId), ['red', 'next', 'late']);
+      expect(out.last.next.single.time, t0.add(const Duration(minutes: 10)));
+    });
+
     test('a single stop lists every bus, soonest first', () {
       final out = boardPerDeparture([
         row('3', [dep(2, 'p', live: true), dep(16, 'q', live: true)]),

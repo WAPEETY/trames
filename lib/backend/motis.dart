@@ -9,7 +9,7 @@ import 'backend.dart';
 ///
 /// Transitous (https://transitous.org) is a public MOTIS instance; a
 /// self-hosted MOTIS uses this same class with a different [baseUrl].
-class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, TripDetails, WalkRouter {
+class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, TripDetails, WalkRouter, ReturnSource {
   MotisClient({
     this.baseUrl = 'https://api.transitous.org',
     this.language = 'it',
@@ -46,6 +46,12 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
   static String _ll(LatLng p) => '${p.latitude},${p.longitude}';
   static DateTime _time(String s) => DateTime.parse(s).toLocal();
   static LatLng _pos(Map<String, dynamic> j) => LatLng((j['lat'] as num).toDouble(), (j['lon'] as num).toDouble());
+
+  /// The trip's first stop (`tripFrom` on legs and stop times).
+  static TripOrigin? _origin(Object? j) => switch (j) {
+        {'stopId': final String id, 'lat': num _, 'lon': num _} => TripOrigin(stopId: id, position: _pos(j as Map<String, dynamic>)),
+        _ => null,
+      };
 
   /// MOTIS trip ids look like `20261112_04:45_it-Lazio-Rome_0#1054-2`
   /// (service date, departure, feed id, GTFS trip_id). Keep only the GTFS id.
@@ -161,6 +167,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
       delaySeconds: transit && scheduled != null ? start.difference(scheduled).inSeconds : null,
       arrivalDelaySeconds: transit && scheduledEnd != null ? end.difference(scheduledEnd).inSeconds : null,
       intermediateStops: (j['intermediateStops'] as List?)?.length ?? 0,
+      origin: transit ? _origin(j['tripFrom']) : null,
       alternatives: [
         for (final alt in (j['alternatives'] as List?) ?? const []) ?_alternative(alt as List),
       ],
@@ -197,8 +204,13 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
       });
   }
 
-  Future<TripInfo> _fetchTrip(String id) async {
-    final d = await _get('/api/v6/trip', {'tripId': id}) as Map<String, dynamic>;
+  Future<TripInfo> _fetchTrip(String id) async =>
+      _parseTrip(await _get('/api/v6/trip', {'tripId': id}) as Map<String, dynamic>);
+
+  /// A time is live unless MOTIS says it's the timetable's.
+  static bool _liveReason(Object? reason) => reason is String && reason != 'NO_RT_DATA' && reason != 'SCHEDULED';
+
+  TripInfo _parseTrip(Map<String, dynamic> d) {
     final legs = (d['legs'] as List).cast<Map<String, dynamic>>();
     final ride = legs.firstWhere((l) => l['tripId'] != null, orElse: () => legs.first);
     TripStop stop(Map<String, dynamic> p) => TripStop(
@@ -207,6 +219,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
           stopId: p['stopId'] as String?,
           time: switch (p['departure'] ?? p['arrival']) { final String t => _time(t), _ => null },
           scheduled: switch (p['scheduledDeparture'] ?? p['scheduledArrival']) { final String t => _time(t), _ => null },
+          live: _liveReason(p['departureTimestampReason'] ?? p['arrivalTimestampReason']),
         );
     return TripInfo(
       line: ride['routeShortName'] as String? ?? ride['displayName'] as String? ?? '',
@@ -233,6 +246,63 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     final date = v.startDate, time = v.startTime, trip = v.tripId, feed = vehicleFeedId;
     if (date == null || time == null || trip == null || feed == null || time.length < 5) return null;
     return '${date}_${time.substring(0, 5)}_${feed}_$trip';
+  }
+
+  // ---- ReturnSource ----
+
+  /// Live data changes: these are kept a minute.
+  static const _fresh = Duration(minutes: 1);
+  final _runs = <String, (DateTime, Future<List<TerminusRun>>)>{};
+  final _ends = <String, (DateTime, Future<TripEnd?>)>{};
+
+  static Future<T> _cached<T>(Map<String, (DateTime, Future<T>)> cache, String key, Future<T> Function() load) {
+    final hit = cache[key];
+    if (hit != null && DateTime.now().difference(hit.$1) < _fresh) return hit.$2;
+    final f = load();
+    cache[key] = (DateTime.now(), f);
+    f.then<void>((_) {}, onError: (Object _) {
+      if (cache[key]?.$2 == f) cache.remove(key); // retry next time
+    });
+    return f;
+  }
+
+  @override
+  Future<List<TerminusRun>> departuresFrom(String stopId) => _cached(_runs, stopId, () async {
+        final d = await _get('/api/v6/stoptimes', {
+          'stopId': stopId,
+          'n': '30',
+          'radius': '0',
+          'exactRadius': 'true',
+        }) as Map<String, dynamic>;
+        return [
+          for (final s in d['stopTimes'] as List)
+            if (s['pickupDropoffType'] != 'NOT_ALLOWED' && s['cancelled'] != true && s['tripCancelled'] != true)
+              if ((s['place'] as Map)['scheduledDeparture'] case final String sched)
+                TerminusRun(
+                  tripId: rawTripId(s['tripId'] as String?) ?? '',
+                  line: s['routeShortName'] as String? ?? s['displayName'] as String? ?? '',
+                  scheduled: _time(sched),
+                  realtime: s['realTime'] as bool? ?? false,
+                  directionId: int.tryParse('${s['directionId']}'),
+                ),
+        ];
+      });
+
+  /// MOTIS predicts up to the second-to-last stop but leaves the last one on
+  /// the timetable: take the last live stop and add the timetabled minutes
+  /// from there to the end.
+  @override
+  Future<TripEnd?> tripEnd(Vehicle v) {
+    final id = tripIdForVehicle(v);
+    if (id == null) return Future.value();
+    return _cached(_ends, id, () async {
+      final t = _parseTrip(await _get('/api/v6/trip', {'tripId': id}) as Map<String, dynamic>);
+      final last = t.stops.lastOrNull;
+      if (last == null || last.scheduled == null) return null;
+      final live = t.stops.lastWhere((s) => s.live && s.time != null && s.scheduled != null, orElse: () => last);
+      final time = live == last ? (last.time ?? last.scheduled!) : live.time!.add(last.scheduled!.difference(live.scheduled!));
+      return TripEnd(position: last.position, time: time);
+    });
   }
 
   // ---- PlaceSearch ----
@@ -392,6 +462,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
           delaySeconds: sched == null ? null : time.difference(sched).inSeconds,
           tripId: rawTripId(s['tripId'] as String?),
           backendTripId: s['tripId'] as String?,
+          origin: _origin(s['tripFrom']),
         ),
       ));
     }

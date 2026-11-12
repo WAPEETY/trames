@@ -258,22 +258,31 @@ Color liveColor(BuildContext context) {
 
 /// Color of a time by how sure it is that the bus comes (not by how late it
 /// runs: what matters is the wait): green when the bus is on its way, yellow
-/// when it hasn't started its trip yet, grey for timetable only.
+/// when it hasn't started its trip yet, red when a bus coming back from the
+/// other direction should make it, grey for timetable only. Purple marks a
+/// time the app worked out itself (bus coming back too late for the
+/// timetable): a fixed violet, barely harmonized, so it never reads as the
+/// app's own (wallpaper) accent.
 /// Light/dark tones keep text contrast on the sheet's surfaces.
 Color certaintyColor(BuildContext context, Certainty c) {
   final cs = Theme.of(context).colorScheme;
   final dark = cs.brightness == Brightness.dark;
   return switch (c) {
     Certainty.scheduled => cs.onSurfaceVariant,
+    Certainty.estimated => Color.lerp(dark ? const Color(0xFFC9A7FF) : const Color(0xFF6B3FD4), cs.primary, 0.1)!,
+    Certainty.returning => (dark ? const Color(0xFFFF8A80) : const Color(0xFFB3261E)).harmonizeWith(cs.primary),
     Certainty.waiting => (dark ? const Color(0xFFE9C46A) : const Color(0xFF7A5D00)).harmonizeWith(cs.primary),
     Certainty.moving => liveColor(context),
   };
 }
 
-/// Icon next to a live time: the live signal when the bus is on its way, a
-/// departure board (bus + clock) when it hasn't left yet; none on timetable.
+/// Icon next to a time: live signal (bus on its way), departure board (bus +
+/// clock: not left yet), U-turn (a bus coming back around), sparkles (our
+/// estimate); none on plain timetable.
 IconData? certaintyIcon(Certainty c) => switch (c) {
       Certainty.scheduled => null,
+      Certainty.estimated => Icons.auto_awesome_rounded,
+      Certainty.returning => Icons.u_turn_left_rounded,
       Certainty.waiting => Icons.departure_board_rounded,
       Certainty.moving => Icons.sensors_rounded,
     };
@@ -281,6 +290,8 @@ IconData? certaintyIcon(Certainty c) => switch (c) {
 /// For screen readers.
 String describeCertainty(Certainty c) => switch (c) {
       Certainty.scheduled => 'scheduled',
+      Certainty.estimated => 'estimated by the app, bus coming back late',
+      Certainty.returning => 'scheduled, a bus is coming back in time',
       Certainty.waiting => 'live, bus not departed yet',
       Certainty.moving => 'live, bus on its way',
     };
@@ -323,15 +334,16 @@ class ItineraryRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final legs = it.transitLegs.toList();
-    final allLive = legs.isNotEmpty && legs.every((l) => l.realtime);
-    final firstLive = legs.isNotEmpty && legs.first.realtime;
+    // "Live" here: backed by a real bus (anything but plain timetable).
+    final certainties = legs.map(certaintyFor).toList();
+    final weakest = certainties.isEmpty ? Certainty.scheduled : certainties.reduce((a, b) => a.index < b.index ? a : b);
+    final allLive = legs.isNotEmpty && weakest != Certainty.scheduled;
+    final firstCertainty = legs.isEmpty ? Certainty.scheduled : certainties.first;
+    final firstLive = firstCertainty != Certainty.scheduled;
     final grey = cs.onSurfaceVariant;
     final base = tt.bodyMedium?.copyWith(color: grey);
-    final firstCertainty = legs.isEmpty ? Certainty.scheduled : certaintyFor(legs.first);
     final depColor = firstLive ? certaintyColor(context, firstCertainty) : grey;
-    final arrColor = allLive
-        ? certaintyColor(context, legs.map(certaintyFor).reduce((a, b) => a.index < b.index ? a : b))
-        : grey;
+    final arrColor = allLive ? certaintyColor(context, weakest) : grey;
     final depStyle = base?.copyWith(color: depColor, fontWeight: FontWeight.w600);
     final arrStyle = base?.copyWith(color: arrColor, fontWeight: FontWeight.w600);
 
