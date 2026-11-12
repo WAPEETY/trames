@@ -16,12 +16,17 @@ class SplitLinePill extends StatelessWidget {
     required this.icon,
     required this.color,
     this.maxShown = 3,
+    this.outlineFirst = false,
   });
 
   final List<String> lines;
   final IconData icon;
   final Color color;
   final int maxShown;
+
+  /// First segment unfilled (icon and label drawn in [color]), e.g. a walk
+  /// chosen over a ride, so it reads like a plain walk leg.
+  final bool outlineFirst;
 
   static const _height = 28.0;
   static const _hPad = 9.0; // inner padding of each segment
@@ -42,10 +47,14 @@ class SplitLinePill extends StatelessWidget {
 
     final segments = <_Segment>[];
     for (var i = 0; i < shown.length; i++) {
-      final bg = i == 0 ? strong : soft;
-      final fg = fgOn(bg);
+      final clear = i == 0 && outlineFirst;
+      final bg = clear ? Colors.transparent : (i == 0 ? strong : soft);
+      final fg = clear ? color : fgOn(bg);
       final label = TextPainter(
-        text: TextSpan(text: shown[i], style: base.copyWith(color: fg)),
+        // Unfilled: same look as a plain walk leg's "🚶 20".
+        text: TextSpan(
+            text: shown[i],
+            style: clear ? Theme.of(context).textTheme.labelMedium?.copyWith(color: fg) : base.copyWith(color: fg)),
         textDirection: TextDirection.ltr,
         textScaler: scaler,
         maxLines: 1,
@@ -54,12 +63,12 @@ class SplitLinePill extends StatelessWidget {
           ? (TextPainter(
               text: TextSpan(
                 text: String.fromCharCode(icon.codePoint),
-                style: TextStyle(fontFamily: icon.fontFamily, package: icon.fontPackage, fontSize: _iconSize, color: fg),
+                style: TextStyle(fontFamily: icon.fontFamily, package: icon.fontPackage, fontSize: clear ? 18 : _iconSize, color: fg),
               ),
               textDirection: TextDirection.ltr,
             )..layout())
           : null;
-      final content = label.width + (iconPainter == null ? 0 : _iconSize + 3);
+      final content = label.width + (iconPainter == null ? 0 : iconPainter.width + 3);
       segments.add(_Segment(label, iconPainter, bg, content + 2 * _hPad));
     }
 

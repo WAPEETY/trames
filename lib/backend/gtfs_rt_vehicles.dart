@@ -44,6 +44,7 @@ class GtfsRtVehicleFeed implements VehicleFeed {
         startDate: v.trip.hasStartDate() ? v.trip.startDate : null,
         startTime: v.trip.hasStartTime() ? v.trip.startTime : null,
         directionId: v.trip.hasDirectionId() ? v.trip.directionId : null,
+        stopSequence: v.hasCurrentStopSequence() ? v.currentStopSequence : null,
       ));
     }
     return VehicleSnapshot(feedTimestamp: _epoch(feed.header.timestamp.toInt()), vehicles: out);

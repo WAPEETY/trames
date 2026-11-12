@@ -111,9 +111,11 @@ class RouteSearch {
   }
 
   /// Keeps only alternatives that board and get off near the planned ride's
-  /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]).
+  /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]) and that haven't
+  /// left yet.
   Itinerary trimAlternatives(Itinerary it) {
     final max = policy.maxAlternativeStopDistanceMeters;
+    final now = _clock();
     var changed = false;
     final legs = [
       for (final l in it.legs)
@@ -123,7 +125,10 @@ class RouteSearch {
           () {
             final keep = [
               for (final a in l.alternatives)
-                if (distanceMeters(a.ride.from, l.from) <= max && distanceMeters(a.ride.to, l.to) <= max) a,
+                if (a.reachableFrom(now) &&
+                    distanceMeters(a.ride.from, l.from) <= max &&
+                    distanceMeters(a.ride.to, l.to) <= max)
+                  a,
             ];
             if (keep.length == l.alternatives.length) return l;
             changed = true;
@@ -223,9 +228,22 @@ class RouteSearch {
     for (final it in unique.values) {
       (groups[it.signature] ??= []).add(it);
     }
+    // Routes that differ only by which interchangeable line they take (60 ›
+    // 19BUS and 60 › 3BUS, when the 3BUS is an alternative of the 19BUS) show
+    // the same split pill: one route, its earliest departure first.
+    final merged = <List<Itinerary>>[];
+    for (final g in groups.values.map((v) => v..sort(_byArrival)).toList()..sort((a, b) => _byArrival(a.first, b.first))) {
+      final same = g.first.walkOnly ? null : merged.where((m) => _interchangeable(m.first, g.first)).firstOrNull;
+      if (same == null) {
+        merged.add(g);
+      } else {
+        same
+          ..addAll(g)
+          ..sort(_byArrival);
+      }
+    }
     final result = [
-      for (final e in groups.entries)
-        RouteGroup(e.key, (e.value..sort(_byArrival)).take(e.key.isEmpty ? 1 : maxPerGroup).toList()),
+      for (final m in merged) RouteGroup(m.first.signature, m.take(m.first.walkOnly ? 1 : maxPerGroup).toList()),
     ]..sort((a, b) => _byArrival(a.best, b.best));
     if (result.isEmpty) return result;
 
@@ -262,6 +280,21 @@ class RouteSearch {
         ..insert(0, walk);
     }
     return result;
+  }
+
+  /// Same rides leg by leg, up to interchangeable lines: boarding and getting
+  /// off near the same stops, with a line in common among each leg's line
+  /// and its alternatives.
+  bool _interchangeable(Itinerary a, Itinerary b) {
+    final ra = a.transitLegs.toList(), rb = b.transitLegs.toList();
+    if (ra.isEmpty || ra.length != rb.length) return false;
+    final max = policy.maxAlternativeStopDistanceMeters;
+    Set<String> lines(Leg l) => {l.routeShortName ?? l.mode, for (final x in l.alternatives) x.line};
+    for (var i = 0; i < ra.length; i++) {
+      if (distanceMeters(ra[i].from, rb[i].from) > max || distanceMeters(ra[i].to, rb[i].to) > max) return false;
+      if (lines(ra[i]).intersection(lines(rb[i])).isEmpty) return false;
+    }
+    return true;
   }
 
   static int _byArrival(Itinerary a, Itinerary b) {

@@ -38,6 +38,7 @@ class TripVariants {
     this.policy = kWalkPolicy,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now {
+    final now = _clock();
     for (var i = 0; i < base.legs.length; i++) {
       final leg = base.legs[i];
       if (!leg.transit) continue;
@@ -52,7 +53,10 @@ class TripVariants {
         [
           if (keep(leg)) base.legs.sublist(start, end + 1),
           for (final alt in leg.alternatives)
-            if (keep(alt.ride) && seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}')) alt.legs,
+            if (keep(alt.ride) &&
+                alt.reachableFrom(now) &&
+                seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}'))
+              alt.legs,
         ],
         walkable: walks != null && distanceMeters(from, to) / 1000 <= policy.maxWalkKm,
         hidden: !keep(leg),

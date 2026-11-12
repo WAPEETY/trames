@@ -112,6 +112,15 @@ class LegAlternative {
 
   Leg get ride => legs.firstWhere((l) => l.transit);
   String get line => ride.routeShortName ?? ride.mode;
+
+  /// Whether the ride can still be caught leaving [now] (walking to its stop
+  /// first, a minute of slack). The planner also lists earlier trips that
+  /// would have made the connection: buses that may have left already.
+  bool reachableFrom(DateTime now) {
+    final i = legs.indexWhere((l) => l.transit);
+    final walk = legs.take(i).fold(Duration.zero, (d, l) => d + l.duration);
+    return !ride.start.subtract(walk).isBefore(now.subtract(const Duration(minutes: 1)));
+  }
 }
 
 class Leg {
@@ -267,10 +276,20 @@ class Vehicle {
     this.startDate,
     this.startTime,
     this.directionId,
+    this.stopSequence,
   });
 
   final String id;
   final String label;
+
+  /// GTFS-RT current_stop_sequence: the stop the bus is at or heading to
+  /// (1 = the first stop, the terminus). Null when the feed doesn't say.
+  final int? stopSequence;
+
+  /// Whether the bus has left the first stop of its trip. Still at (or
+  /// driving to) the terminus = not yet: its times are only a forecast.
+  /// Unknown position in the trip counts as started.
+  bool get started => stopSequence == null || stopSequence! > 1;
 
   /// GTFS-RT trip descriptor: service day (YYYYMMDD) and first departure
   /// (HH:MM:SS, may exceed 24h) of the trip being run, and its direction.
@@ -285,6 +304,23 @@ class Vehicle {
   final LatLng position;
   final DateTime timestamp;
   final double? bearing;
+}
+
+/// How sure we are that a departure will actually come, from its live data:
+///  * [scheduled]: timetable only;
+///  * [waiting]: live forecast, but its bus hasn't started the trip yet
+///    (parked at the terminus, or no bus on it yet);
+///  * [moving]: its bus is on the way.
+enum Certainty { scheduled, waiting, moving }
+
+/// [realtime]: the time is a live forecast. [vehicles]: live buses by trip
+/// id, or null without a GPS feed (then a live time counts as [moving], as
+/// there's no way to tell). [tripId]: the raw GTFS trip id.
+Certainty certaintyOf({required bool realtime, required String? tripId, required Map<String, Vehicle>? vehicles}) {
+  if (!realtime) return Certainty.scheduled;
+  if (vehicles == null) return Certainty.moving;
+  final v = tripId == null ? null : vehicles[tripId];
+  return v != null && v.started ? Certainty.moving : Certainty.waiting;
 }
 
 /// A walking route between two points, from the planner's street routing.

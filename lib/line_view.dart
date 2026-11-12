@@ -2,7 +2,6 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
 import 'backend/backend.dart';
-import 'backend/delay.dart';
 import 'sheet_widgets.dart';
 
 /// What the line view shows: one line, one of its trips (a direction) with
@@ -29,6 +28,8 @@ List<Widget> lineSlivers(
   required Color color,
   /// Live buses of the line on the map; null where the city has no GPS feed.
   required int? liveBuses,
+  /// How sure the shown trip's live times are (see [certaintyOf]).
+  required Certainty certainty,
   required VoidCallback onBack,
   required VoidCallback? onSwitchDirection,
   required ValueChanged<TripStop> onStopTap,
@@ -104,7 +105,7 @@ List<Widget> lineSlivers(
         itemBuilder: (_, i) => _StopRow(
           stop: trip.stops[i],
           color: color,
-          live: trip.realtime,
+          certainty: certainty,
           first: i == 0,
           last: i == trip.stops.length - 1,
         ),
@@ -113,13 +114,13 @@ List<Widget> lineSlivers(
   ];
 }
 
-/// One stop of the trip: time (delay-colored when live), a line with a dot,
-/// the name. Stops the bus already left are dimmed.
+/// One stop of the trip: time (colored by how sure it is), a line with a
+/// dot, the name. Stops the bus already left are dimmed.
 class _StopRow extends StatelessWidget {
-  const _StopRow({required this.stop, required this.color, required this.live, required this.first, required this.last});
+  const _StopRow({required this.stop, required this.color, required this.certainty, required this.first, required this.last});
   final TripStop stop;
   final Color color;
-  final bool live;
+  final Certainty certainty;
   final bool first;
   final bool last;
 
@@ -127,8 +128,8 @@ class _StopRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final passed = stop.time != null && stop.time!.isBefore(DateTime.now().subtract(const Duration(minutes: 1)));
-    final level = kDelayPolicy.classify(stop.delaySeconds, live: live);
-    final timeColor = passed ? cs.outline : (live ? delayColor(context, level) : cs.onSurface);
+    final timeColor =
+        passed ? cs.outline : (certainty == Certainty.scheduled ? cs.onSurface : certaintyColor(context, certainty));
     return Opacity(
       opacity: passed ? 0.55 : 1,
       child: SizedBox(

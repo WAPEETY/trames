@@ -2,7 +2,6 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
 import 'backend/backend.dart';
-import 'backend/delay.dart';
 import 'backend/route_search.dart';
 import 'live_buses.dart';
 import 'split_line_pill.dart';
@@ -131,43 +130,44 @@ class LinePill extends StatelessWidget {
 
 /// Big countdown used in nearby departures: "6" over "min".
 class Countdown extends StatelessWidget {
-  const Countdown({super.key, required this.departure});
+  const Countdown({super.key, required this.departure, required this.certainty});
   final Departure departure;
+  final Certainty certainty;
 
   @override
   Widget build(BuildContext context) {
-    final level = kDelayPolicy.classify(departure.delaySeconds, live: departure.realtime);
     final m = minutesUntil(departure.time);
     return Semantics(
-      label: '${m <= 0 ? 'now' : 'in $m minutes'}, ${departure.realtime ? describeDelay(departure.delaySeconds) : 'scheduled'}',
+      label: '${m <= 0 ? 'now' : 'in $m minutes'}, ${describeCertainty(certainty)}',
       excludeSemantics: true,
       child: LiveMinutes(
         minutes: m,
-        live: departure.realtime,
-        color: delayColor(context, level),
+        certainty: certainty,
         style: emphasized(context).headlineLarge,
       ),
     );
   }
 }
 
-/// Big minute count with "min" below; a live icon sits to its left,
-/// sized to the number and centered on it.
+/// Big minute count with "min" below, colored by [certainty]; its icon (bus
+/// on the way / not started yet) sits to the left, sized to the number and
+/// centered on it.
 class LiveMinutes extends StatelessWidget {
-  const LiveMinutes({super.key, required this.minutes, required this.live, required this.color, required this.style});
+  const LiveMinutes({super.key, required this.minutes, required this.certainty, required this.style});
   final int minutes;
-  final bool live;
-  final Color color;
+  final Certainty certainty;
   final TextStyle style;
 
   @override
   Widget build(BuildContext context) {
+    final color = certaintyColor(context, certainty);
+    final icon = certaintyIcon(certainty);
     final numberStyle = style.copyWith(color: color, height: 1);
     final iconSize = (numberStyle.fontSize ?? 32) * 0.6;
     return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
       Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
-        if (live) ...[
-          Icon(Icons.sensors_rounded, size: iconSize, color: color),
+        if (icon != null) ...[
+          Icon(icon, size: iconSize, color: color),
           const SizedBox(width: 4),
         ],
         Text(minutes <= 0 ? 'now' : '$minutes', style: numberStyle),
@@ -179,8 +179,12 @@ class LiveMinutes extends StatelessWidget {
 
 /// One nearby departure: line, direction, stop, countdown.
 class NearbyDepartureRow extends StatelessWidget {
-  const NearbyDepartureRow({super.key, required this.row});
+  const NearbyDepartureRow({super.key, required this.row, required this.certainty, this.showStop = true});
   final BoardRow row;
+  final Certainty certainty;
+
+  /// The "stop · distance · then …" line; off when showing a single stop.
+  final bool showStop;
 
   @override
   Widget build(BuildContext context) {
@@ -208,16 +212,18 @@ class NearbyDepartureRow extends StatelessWidget {
                     style: emphasized(context).titleSmall.copyWith(color: cs.onSurface)),
               ),
             ]),
-            const SizedBox(height: 2),
-            Text(
-              '${_title(row.stop.name)} · ${row.stop.distanceMeters} m${later.isEmpty ? '' : ' · then $later'}',
-              overflow: TextOverflow.ellipsis,
-              style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
-            ),
+            if (showStop) ...[
+              const SizedBox(height: 2),
+              Text(
+                '${_title(row.stop.name)} · ${row.stop.distanceMeters} m${later.isEmpty ? '' : ' · then $later'}',
+                overflow: TextOverflow.ellipsis,
+                style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
+              ),
+            ],
           ]),
         ),
         const SizedBox(width: 12),
-        Countdown(departure: row.next.first),
+        Countdown(departure: row.next.first, certainty: certainty),
       ]),
     );
   }
@@ -250,34 +256,41 @@ Color liveColor(BuildContext context) {
   return base.harmonizeWith(cs.primary);
 }
 
-/// Color of a live time by how late it is: green on time (or early), orange
-/// a bit late, red very late; grey when there's no live data.
+/// Color of a time by how sure it is that the bus comes (not by how late it
+/// runs: what matters is the wait): green when the bus is on its way, yellow
+/// when it hasn't started its trip yet, grey for timetable only.
 /// Light/dark tones keep text contrast on the sheet's surfaces.
-Color delayColor(BuildContext context, DelayLevel level) {
+Color certaintyColor(BuildContext context, Certainty c) {
   final cs = Theme.of(context).colorScheme;
   final dark = cs.brightness == Brightness.dark;
-  return switch (level) {
-    DelayLevel.unknown => cs.onSurfaceVariant,
-    DelayLevel.onTime => liveColor(context),
-    DelayLevel.minor => (dark ? const Color(0xFFFFB960) : const Color(0xFF8F4C00)).harmonizeWith(cs.primary),
-    DelayLevel.major => (dark ? const Color(0xFFFF8A80) : const Color(0xFFB3261E)).harmonizeWith(cs.primary),
+  return switch (c) {
+    Certainty.scheduled => cs.onSurfaceVariant,
+    Certainty.waiting => (dark ? const Color(0xFFE9C46A) : const Color(0xFF7A5D00)).harmonizeWith(cs.primary),
+    Certainty.moving => liveColor(context),
   };
 }
 
-/// Delay level of boarding [leg], weighed against how far away it is.
-DelayLevel boardingLevel(Leg leg) {
-  final until = leg.start.difference(DateTime.now());
-  return kDelayPolicy.classify(leg.delaySeconds,
-      reference: until.isNegative ? Duration.zero : until, live: leg.realtime);
-}
+/// Icon next to a live time: the live signal when the bus is on its way, a
+/// departure board (bus + clock) when it hasn't left yet; none on timetable.
+IconData? certaintyIcon(Certainty c) => switch (c) {
+      Certainty.scheduled => null,
+      Certainty.waiting => Icons.departure_board_rounded,
+      Certainty.moving => Icons.sensors_rounded,
+    };
+
+/// For screen readers.
+String describeCertainty(Certainty c) => switch (c) {
+      Certainty.scheduled => 'scheduled',
+      Certainty.waiting => 'live, bus not departed yet',
+      Certainty.moving => 'live, bus on its way',
+    };
 
 /// One itinerary in the route list.
 ///
-/// Live state is shown through color only (green on time, orange a bit
-/// late, red very late; see [DelayPolicy]):
-///  * every transit leg live  -> time range + arrival colored by arrival delay;
-///  * first leg live          -> departure time colored by that bus's delay;
-///  * otherwise               -> neutral (scheduled).
+/// Live state is shown through color (see [certaintyColor]):
+///  * departure: by how sure the first bus is (on its way / not started);
+///  * arrival, when every ride is live: by the least sure of them;
+///  * otherwise neutral (scheduled).
 class ItineraryRow extends StatelessWidget {
   const ItineraryRow({
     super.key,
@@ -285,10 +298,14 @@ class ItineraryRow extends StatelessWidget {
     required this.colorFor,
     this.padding = const EdgeInsets.fromLTRB(20, 16, 20, 16),
     this.lineOptions,
+    required this.certaintyFor,
   });
   final Itinerary it;
   final Color Function(Itinerary, Leg) colorFor;
   final EdgeInsets padding;
+
+  /// How sure each ride's live time is (see [certaintyOf]).
+  final Certainty Function(Leg) certaintyFor;
 
   /// Optional lines per transit leg (in order), planned line first, e.g.
   /// ["88", "3"] when either can do the leg: shown as a split pill.
@@ -310,11 +327,10 @@ class ItineraryRow extends StatelessWidget {
     final firstLive = legs.isNotEmpty && legs.first.realtime;
     final grey = cs.onSurfaceVariant;
     final base = tt.bodyMedium?.copyWith(color: grey);
-    // Departure: first vehicle's delay vs. how far away it is.
-    // Arrival: final arrival delay vs. the trip's duration.
-    final depColor = firstLive ? delayColor(context, boardingLevel(legs.first)) : grey;
+    final firstCertainty = legs.isEmpty ? Certainty.scheduled : certaintyFor(legs.first);
+    final depColor = firstLive ? certaintyColor(context, firstCertainty) : grey;
     final arrColor = allLive
-        ? delayColor(context, kDelayPolicy.classify(it.arrivalDelaySeconds, reference: it.duration))
+        ? certaintyColor(context, legs.map(certaintyFor).reduce((a, b) => a.index < b.index ? a : b))
         : grey;
     final depStyle = base?.copyWith(color: depColor, fontWeight: FontWeight.w600);
     final arrStyle = base?.copyWith(color: arrColor, fontWeight: FontWeight.w600);
@@ -325,7 +341,7 @@ class ItineraryRow extends StatelessWidget {
           alignment: PlaceholderAlignment.middle,
           child: Padding(
             padding: const EdgeInsets.only(right: 4),
-            child: Icon(Icons.sensors_rounded, size: 16, color: depColor),
+            child: Icon(certaintyIcon(firstCertainty) ?? Icons.sensors_rounded, size: 16, color: depColor),
           ),
         ),
       TextSpan(text: hm(it.start), style: firstLive ? depStyle : base),
@@ -365,6 +381,7 @@ class ItineraryRow extends StatelessWidget {
                     lines: ['${it.legs[i].duration.inMinutes}', ...buses],
                     icon: Icons.directions_walk_rounded,
                     color: grey,
+                    outlineFirst: true,
                   )
                 else
                   Row(mainAxisSize: MainAxisSize.min, children: [
@@ -389,19 +406,17 @@ class ItineraryRow extends StatelessWidget {
   }
 }
 
-/// Minutes until this vehicle reaches the boarding stop: green with live icon
-/// when the time is live, grey when it is only predicted from the timetable.
+/// Minutes until this vehicle reaches the boarding stop, colored by how sure
+/// that is ([certaintyColor]).
 class WaitIndicator extends StatelessWidget {
-  const WaitIndicator({super.key, required this.minutes, required this.live, this.level = DelayLevel.onTime});
+  const WaitIndicator({super.key, required this.minutes, required this.certainty});
   final int minutes;
-  final bool live;
-  final DelayLevel level;
+  final Certainty certainty;
 
   @override
   Widget build(BuildContext context) => LiveMinutes(
         minutes: minutes,
-        live: live,
-        color: live ? delayColor(context, level) : Theme.of(context).colorScheme.onSurfaceVariant,
+        certainty: certainty,
         style: emphasized(context).headlineMedium,
       );
 }
@@ -409,21 +424,24 @@ class WaitIndicator extends StatelessWidget {
 /// One leg in the trip detail. [waitMinutes] is how long until the vehicle
 /// reaches the boarding stop (transit legs only).
 class LegRow extends StatelessWidget {
-  const LegRow({super.key, required this.leg, required this.color, this.bus, this.waitMinutes});
+  const LegRow(
+      {super.key, required this.leg, required this.color, this.bus, this.waitMinutes, this.certainty = Certainty.scheduled});
   final Leg leg;
   final Color color;
   final TrackedBus? bus;
   final int? waitMinutes;
+
+  /// How sure this ride's live time is (rides only).
+  final Certainty certainty;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final mins = leg.end.difference(leg.start).inMinutes;
-    // A ride's delay weighed against that ride's own duration.
-    final level = kDelayPolicy.classify(leg.delaySeconds, reference: leg.duration, live: leg.realtime);
-    final timeStyle =
-        emphasized(context).labelLarge.copyWith(color: leg.realtime ? delayColor(context, level) : cs.onSurface);
+    final timeStyle = emphasized(context)
+        .labelLarge
+        .copyWith(color: leg.transit && leg.realtime ? certaintyColor(context, certainty) : cs.onSurface);
     if (!leg.transit) {
       return Padding(
         padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
@@ -439,14 +457,6 @@ class LegRow extends StatelessWidget {
       );
     }
     final busAge = bus == null ? null : DateTime.now().difference(bus!.vehicle.timestamp).inSeconds;
-    final d = leg.delaySeconds ?? 0;
-    final delay = !leg.realtime
-        ? null
-        : d >= 60
-            ? '+${(d / 60).round()} min late'
-            : d <= -60
-                ? '${(-d / 60).round()} min early'
-                : 'on time';
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 16, 20, 16),
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
@@ -466,14 +476,15 @@ class LegRow extends StatelessWidget {
             Text(
               [
                 '${leg.intermediateStops} stops · $mins min · arrive ${hm(leg.end)}',
-                ?delay,
               ].join(' · '),
               style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             if (bus != null || leg.realtime) ...[
               const SizedBox(height: 4),
               Text(
-                bus != null ? 'bus ${bus!.vehicle.label} · GPS ${busAge}s ago' : 'locating bus…',
+                bus != null
+                    ? 'bus ${bus!.vehicle.label}${bus!.vehicle.started ? '' : ' · not departed yet'} · GPS ${busAge}s ago'
+                    : 'locating bus…',
                 style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant),
               ),
             ],
@@ -482,7 +493,7 @@ class LegRow extends StatelessWidget {
         ),
         if (waitMinutes != null) ...[
           const SizedBox(width: 12),
-          WaitIndicator(minutes: waitMinutes!, live: leg.realtime, level: level),
+          WaitIndicator(minutes: waitMinutes!, certainty: certainty),
         ],
       ]),
     );
@@ -492,9 +503,10 @@ class LegRow extends StatelessWidget {
 /// One line sequence in the route list: its best trip in full, small tags
 /// (fastest / fewest changes / least walking). Later buses: open it and swipe.
 class RouteGroupRow extends StatelessWidget {
-  const RouteGroupRow({super.key, required this.group, required this.colorFor});
+  const RouteGroupRow({super.key, required this.group, required this.colorFor, required this.certaintyFor});
   final RouteGroup group;
   final Color Function(Itinerary, Leg) colorFor;
+  final Certainty Function(Leg) certaintyFor;
 
   /// Per transit leg: its own line first, then the other lines that can
   /// replace it (from the planner's leg alternatives).
@@ -515,6 +527,7 @@ class RouteGroupRow extends StatelessWidget {
       ItineraryRow(
         it: group.best,
         colorFor: colorFor,
+        certaintyFor: certaintyFor,
         lineOptions: _lineOptions(group.best),
         padding: EdgeInsets.fromLTRB(20, hasTags ? 8 : 16, 20, 16),
       ),

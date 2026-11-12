@@ -158,6 +158,29 @@ List<BoardRow> groupDepartures(
   return rows.values.toList();
 }
 
+/// Removes departures whose bus has already gone by: timetable-only (no
+/// prediction for this stop) while its trip is out on the road in the live
+/// feed ([runningTrips], raw GTFS trip ids). The operator only predicts the
+/// stops still ahead, so a running trip with no prediction here has passed
+/// it, e.g. a bus 13 minutes early, still listed at its timetable time.
+/// Rows left with no departure are dropped.
+List<BoardRow> dropPassedDepartures(List<BoardRow> rows, Set<String> runningTrips) {
+  if (runningTrips.isEmpty) return rows;
+  return [
+    for (final r in rows)
+      if (r.next.where((d) => d.realtime || !runningTrips.contains(d.tripId)).toList() case final next
+          when next.isNotEmpty)
+        next.length == r.next.length ? r : BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: next),
+  ];
+}
+
+/// One row per bus (instead of per line), soonest first: for a single
+/// stop's board, so every live bus shows as live.
+List<BoardRow> boardPerDeparture(List<BoardRow> rows) => [
+      for (final r in rows)
+        for (final d in r.next) BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: [d]),
+    ]..sort((a, b) => a.next.first.time.compareTo(b.next.first.time));
+
 /// Orders search results for someone at [reference]: everything within
 /// [localKm] first, in the backend's own relevance order (name match), then
 /// the rest nearest first (nearby towns before far-away cities). Stable, so

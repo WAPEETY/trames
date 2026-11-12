@@ -9,6 +9,7 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 
 import 'backend/backend.dart';
 import 'backend/config.dart';
+import 'backend/motis.dart' show MotisClient;
 import 'backend/route_search.dart';
 import 'backend/trip_variants.dart';
 import 'attribution.dart';
@@ -72,6 +73,26 @@ class _HomePageState extends State<HomePage> {
 
   // Departures for the visible map area (idle state).
   List<BoardRow> nearby = [];
+
+  /// Live buses by raw trip id, from the GPS feed, refreshed with the
+  /// departures and the routes. Null with no GPS feed here (or it failed):
+  /// then any live time counts as a bus on its way.
+  Map<String, Vehicle>? liveVehicles;
+
+  Future<Map<String, Vehicle>?> _fetchVehicles() async {
+    final f = backend.vehicles;
+    if (f == null) return null;
+    try {
+      final snap = await f.vehicles();
+      return {for (final v in snap.vehicles) ?v.tripId: v};
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// How sure a live time is: is its bus on the way, or not departed yet.
+  Certainty _certainty(bool realtime, String? tripId) =>
+      certaintyOf(realtime: realtime, tripId: tripId, vehicles: liveVehicles);
   List<Stop> nearbyStops = [];
   final Map<String, Stop> stopById = {};
   bool nearbyLoading = true;
@@ -230,21 +251,30 @@ class _HomePageState extends State<HomePage> {
       if (seq != _areaSeq || !mounted) return;
       final pins = stops.take(kMaxStopPins).toList();
       final boardStops = filterStop != null ? [filterStop!] : pins.take(kMaxBoardStops).toList();
+      // The live feed tells which buses already went by (see
+      // dropPassedDepartures); without it, the boards as they are.
+      final running = _fetchVehicles();
       final boards =
           await Future.wait(boardStops.map((s) => backend.stops.board(s).catchError((_) => <BoardRow>[])));
+      final vehicles = await running;
       if (seq != _areaSeq || !mounted) return;
-      // One row per line + direction, from whichever stop has it soonest.
+      final rows = dropPassedDepartures(boards.expand((b) => b).toList(), vehicles?.keys.toSet() ?? const {});
+      // One stop: every bus on its own row. Nearby: one row per line +
+      // direction, from whichever stop has it soonest.
       final best = <String, BoardRow>{};
-      for (final r in boards.expand((b) => b)) {
+      for (final r in rows) {
         final k = '${r.line}|${r.headsign}';
         if (!best.containsKey(k) || r.next.first.time.isBefore(best[k]!.next.first.time)) best[k] = r;
       }
       setState(() {
         nearbyStops = pins;
+        liveVehicles = vehicles;
         stopById
           ..clear()
           ..addEntries(pins.map((s) => MapEntry(s.id, s)));
-        nearby = best.values.toList()..sort((a, b) => a.next.first.time.compareTo(b.next.first.time));
+        nearby = filterStop != null
+            ? boardPerDeparture(rows)
+            : (best.values.toList()..sort((a, b) => a.next.first.time.compareTo(b.next.first.time)));
         error = null;
       });
       _drawNearbyStops();
@@ -298,8 +328,15 @@ class _HomePageState extends State<HomePage> {
     try {
       // Several planner profiles merged and grouped by line sequence,
       // groups ordered by earliest arrival (see RouteSearch).
+      final vehicles = _fetchVehicles();
       final list = await routeSearch.search(from.position, dest.position);
-      if (mounted && to == dest) setState(() => routes = list);
+      final live = await vehicles;
+      if (mounted && to == dest) {
+        setState(() {
+          routes = list;
+          liveVehicles = live;
+        });
+      }
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -1147,6 +1184,16 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
+  /// Like [_certainty], from the buses the tracker follows (trip and line
+  /// views, polled live): a followed trip with no bus yet is waiting.
+  Certainty _trackedCertainty(bool realtime, String? tripId) => certaintyOf(
+        realtime: realtime,
+        tripId: tripId,
+        vehicles: backend.vehicles == null || tracker.lastError != null
+            ? null
+            : {for (final e in tracker.buses.entries) e.key: e.value.vehicle},
+      );
+
   /// Zoomed out on the stops view: the sheet holds just the search bar.
   bool get _onlySearchBar => selected == null && to == null && line == null && zoomedOut;
 
@@ -1157,6 +1204,7 @@ class _HomePageState extends State<HomePage> {
         l,
         color: Theme.of(context).colorScheme.primary,
         liveBuses: backend.vehicles == null ? null : tracker.buses.length,
+        certainty: _trackedCertainty(l.trip?.realtime ?? false, MotisClient.rawTripId(l.tripId)),
         onBack: _closeLine,
         onSwitchDirection: _otherDirection() == null ? null : () => _loadLineTrip(_otherDirection()!),
         onStopTap: (stop) => map?.animateCamera(CameraUpdate.newLatLngZoom(stop.position, 16.5)),
@@ -1263,7 +1311,12 @@ class _HomePageState extends State<HomePage> {
             M3EList.sliver(
               margin: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: list.length,
-              itemBuilder: (_, i) => NearbyDepartureRow(row: list[i]),
+              itemBuilder: (_, i) =>
+                  NearbyDepartureRow(
+                    row: list[i],
+                    certainty: _certainty(list[i].next.first.realtime, list[i].next.first.tripId),
+                    showStop: filterStop == null,
+                  ),
               onTap: (i) => _openLine(
                 name: list[i].line,
                 mode: list[i].mode,
@@ -1313,7 +1366,11 @@ class _HomePageState extends State<HomePage> {
             M3EList.sliver(
               margin: const EdgeInsets.symmetric(horizontal: 16),
               itemCount: list.length,
-              itemBuilder: (_, i) => RouteGroupRow(group: list[i], colorFor: _colorFor),
+              itemBuilder: (_, i) => RouteGroupRow(
+                group: list[i],
+                colorFor: _colorFor,
+                certaintyFor: (l) => _certainty(l.realtime, l.tripId),
+              ),
               onTap: (i) => _select(list[i].best),
             ),
           ],
@@ -1377,7 +1434,13 @@ class _HomePageState extends State<HomePage> {
           // between arriving on foot and boarding is ~0 by construction: the
           // planner times walks to end when the bus comes.)
           final wait = l.transit ? minutesUntil(l.start) : null;
-          final row = LegRow(leg: l, color: _colorFor(it, l), bus: tracker.buses[l.tripId], waitMinutes: wait);
+          final row = LegRow(
+            leg: l,
+            color: _colorFor(it, l),
+            bus: tracker.buses[l.tripId],
+            waitMinutes: wait,
+            certainty: _trackedCertainty(l.realtime, l.tripId),
+          );
           final v = variants;
           final slot = v?.slotOfLeg(i);
           if (v == null || slot == null || v.variantCount(slot) < 2) return row;
