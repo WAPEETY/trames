@@ -61,6 +61,20 @@ void main() {
     expect(r, isEmpty);
   });
 
+  test('a bus much too late skips to the next departure; far-off ends ignored', () async {
+    // x ready 10:33: 23 min late for b (10:10), within limits -> b +23.
+    // With a 15-min limit: b stays timetable, x runs c (10:30) +3.
+    // y ends a day later (resolved to the next service day): ignored.
+    final s = _Source([_run('b', 10), _run('c', 30)], {'x': _end(30), 'y': _end(24 * 60)});
+    final wide = await run(s, [_bus('x', seq: 30), _bus('y', seq: 20)]);
+    expect(wide['b']!.delay, const Duration(minutes: 23));
+    final r = await ReturnEstimator(s, clock: () => _t0, policy: const ReturnPolicy(maxEstimatedDelay: Duration(minutes: 15)))
+        .estimate([const ReturnQuery('3', _origin)], {for (final v in [_bus('x', seq: 30), _bus('y', seq: 20)]) v.tripId!: v});
+    expect(r.containsKey('b'), isFalse);
+    expect(r['c']!.certainty, Certainty.estimated);
+    expect(r['c']!.delay, const Duration(minutes: 3));
+  });
+
   test('nothing to estimate: no trip requests', () async {
     final s = _Source([_run('b', 10, live: true)], {'x': _end(5)});
     expect(await run(s, [_bus('b', dir: 0, seq: 1), _bus('x')]), isEmpty);

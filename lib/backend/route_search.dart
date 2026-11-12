@@ -136,7 +136,15 @@ class RouteSearch {
           }(),
     ];
     return changed
-        ? Itinerary(start: it.start, end: it.end, legs: legs, transfers: it.transfers, base: it.base, walkSlots: it.walkSlots)
+        ? Itinerary(
+            start: it.start,
+            end: it.end,
+            legs: legs,
+            transfers: it.transfers,
+            base: it.base,
+            walkSlots: it.walkSlots,
+            rideChoices: it.rideChoices,
+          )
         : it;
   }
 

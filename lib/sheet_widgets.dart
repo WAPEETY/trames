@@ -337,7 +337,8 @@ class ItineraryRow extends StatelessWidget {
     // "Live" here: backed by a real bus (anything but plain timetable).
     final certainties = legs.map(certaintyFor).toList();
     final weakest = certainties.isEmpty ? Certainty.scheduled : certainties.reduce((a, b) => a.index < b.index ? a : b);
-    final allLive = legs.isNotEmpty && weakest != Certainty.scheduled;
+    // A missed connection makes the arrival unknown: no color for it.
+    final allLive = legs.isNotEmpty && weakest != Certainty.scheduled && !it.missedConnection;
     final firstCertainty = legs.isEmpty ? Certainty.scheduled : certainties.first;
     final firstLive = firstCertainty != Certainty.scheduled;
     final grey = cs.onSurfaceVariant;
@@ -372,6 +373,17 @@ class ItineraryRow extends StatelessWidget {
                 style: emphasized(context).titleMedium.copyWith(color: cs.onSurface)),
             const SizedBox(height: 2),
             times,
+            if (it.missedConnection) ...[
+              const SizedBox(height: 2),
+              Row(children: [
+                Icon(certaintyIcon(Certainty.estimated), size: 14, color: certaintyColor(context, Certainty.estimated)),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: Text('A bus runs late: likely misses a connection',
+                      style: tt.labelMedium?.copyWith(color: certaintyColor(context, Certainty.estimated))),
+                ),
+              ]),
+            ],
             const SizedBox(height: 10),
             // Wraps inside the left column, so it never runs under the arrival time.
             Wrap(spacing: 4, runSpacing: 6, crossAxisAlignment: WrapCrossAlignment.center, children: [

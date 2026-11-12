@@ -9,6 +9,7 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 
 import 'backend/backend.dart';
 import 'backend/config.dart';
+import 'backend/estimated_rides.dart';
 import 'backend/motis.dart' show MotisClient;
 import 'backend/returning.dart';
 import 'backend/route_search.dart';
@@ -109,13 +110,18 @@ class _HomePageState extends State<HomePage> {
       );
 
   /// Looks for buses coming back to run timetable-only departures: one
-  /// query per line and terminus, soonest departures first. Empty where the
-  /// city has no GPS feed.
+  /// query per line and terminus, soonest departures first. Only for lines
+  /// all on the timetable here: one live departure (yellow or green) and
+  /// the line is left alone. Empty where the city has no GPS feed.
   Future<Map<String, ReturnEstimate>> _estimateReturns(
-      Iterable<(String line, Departure departure)> scheduled, Map<String, Vehicle>? vehicles) async {
+      Iterable<(String line, Departure departure)> departures, Map<String, Vehicle>? vehicles) async {
     final source = backend.returns;
     if (source == null || vehicles == null) return const {};
-    final soonest = scheduled.where((e) => !e.$2.realtime && e.$2.origin != null).toList()
+    String key(String line, Departure d) => '${line.toLowerCase()}|${d.origin?.stopId}';
+    final live = {for (final (line, d) in departures) if (d.realtime) key(line, d)};
+    final soonest = departures
+        .where((e) => !e.$2.realtime && e.$2.origin != null && !live.contains(key(e.$1, e.$2)))
+        .toList()
       ..sort((a, b) => a.$2.time.compareTo(b.$2.time));
     return ReturnEstimator(source).estimate([for (final (line, d) in soonest) ReturnQuery(line, d.origin!)], vehicles);
   }
@@ -160,6 +166,21 @@ class _HomePageState extends State<HomePage> {
   late final WalkCache? walkCache = backend.walks == null ? null : WalkCache(backend.walks!);
   late final RouteSearch routeSearch = RouteSearch(backend.planner, walks: walkCache);
   List<RouteGroup> routes = [];
+
+  /// The planner's itineraries behind [routes], before estimates (purple
+  /// rides) are applied, to re-plan them when new estimates arrive.
+  List<Itinerary> _routeItineraries = [];
+
+  /// [routes] from [_routeItineraries] with [routeReturns] applied: late
+  /// (purple) rides moved and connections re-planned, then grouped and
+  /// ranked again; routes that can't make a connection go last.
+  List<RouteGroup> _buildRoutes() {
+    if (!routeReturns.values.any((e) => e.certainty == Certainty.estimated)) return routeSearch.group(_routeItineraries);
+    final groups = routeSearch.group([
+      for (final it in _routeItineraries) applyEstimatedRides(it, routeReturns, walks: walkCache),
+    ]);
+    return [...groups.where((g) => !g.best.missedConnection), ...groups.where((g) => g.best.missedConnection)];
+  }
   Itinerary? selected;
 
   /// Swappable rides of the selected trip; [selected] is its current composition.
@@ -376,11 +397,16 @@ class _HomePageState extends State<HomePage> {
       final live = await vehicles;
       if (!mounted || to != dest) return;
       setState(() {
-        routes = list;
+        _routeItineraries = [for (final g in list) ...g.options];
         liveVehicles = live;
+        // Last estimates for trips still listed, until the new ones arrive
+        // (no flicker back to the timetable on every refresh).
+        final listed = {for (final it in _routeItineraries) for (final l in it.transitLegs) l.tripId};
+        routeReturns = {for (final e in routeReturns.entries) if (listed.contains(e.key)) e.key: e.value};
+        routes = _buildRoutes();
       });
-      // Then buses coming back for timetable-only rides (red). Purple (our
-      // own time estimate) isn't applied to routes yet: they stay grey.
+      // Then buses coming back for timetable-only rides: red, or purple
+      // with the rides re-planned around our estimate.
       final returns = await _estimateReturns([
         for (final g in list)
           for (final it in g.options)
@@ -391,10 +417,10 @@ class _HomePageState extends State<HomePage> {
               ),
       ], live);
       if (!mounted || to != dest) return;
-      setState(() => routeReturns = {
-            for (final e in returns.entries)
-              if (e.value.certainty == Certainty.returning) e.key: e.value,
-          });
+      setState(() {
+        routeReturns = returns;
+        routes = _buildRoutes();
+      });
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -903,7 +929,7 @@ class _HomePageState extends State<HomePage> {
     }
     // Rebuild the swipeable trip from the planner's original, with the rides
     // the walk rules replaced still walked by default.
-    final v = TripVariants(it.base ?? it, walks: walkCache, walkSlots: it.walkSlots);
+    final v = TripVariants(it.base ?? it, walks: walkCache, walkSlots: it.walkSlots, choices: it.rideChoices);
     setState(() {
       variants = v;
       selected = v.current;

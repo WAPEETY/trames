@@ -35,6 +35,7 @@ class TripVariants {
     this.base, {
     this.walks,
     Set<int> walkSlots = const {},
+    List<int>? choices,
     this.policy = kWalkPolicy,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now {
@@ -72,6 +73,15 @@ class TripVariants {
       for (var s = 0; s < _slots.length; s++)
         walkSlots.contains(s) && _slots[s].walkable ? _slots[s].variants.length : defaults[s],
     ];
+    // Given choices (e.g. a route re-planned around a late bus) win when
+    // they still fit.
+    if (choices != null &&
+        choices.length == _slots.length &&
+        [for (var s = 0; s < _slots.length; s++) choices[s] >= 0 && choices[s] < variantCount(s)].every((ok) => ok)) {
+      final fallback = _choice;
+      _choice = List.of(choices);
+      if (!_compose()) _choice = fallback;
+    }
     if (!_compose()) {
       _choice = List.of(defaults);
       if (!_compose()) {
@@ -298,6 +308,7 @@ class TripVariants {
       transfers: (legs.where((l) => l.transit).length - 1).clamp(0, 99),
       base: base,
       walkSlots: {for (var k = 0; k < _slots.length; k++) if (isWalk(k, _choice[k])) k},
+      rideChoices: List.of(_choice),
       walkOptions: {
         for (var j = 0; j < legs.length; j++)
           if (!legs[j].transit && slotOf[j] != null && _rideLines(slotOf[j]!).isNotEmpty) j: _rideLines(slotOf[j]!),

@@ -5,16 +5,18 @@ import 'backend.dart';
 class ReturnPolicy {
   const ReturnPolicy({
     this.turnaround = const Duration(minutes: 3),
-    this.horizon = const Duration(minutes: 90),
+    this.horizon = const Duration(minutes: 60),
     this.maxBusesPerTerminus = 4,
     this.maxTermini = 6,
     this.maxEndDistanceMeters = 300,
+    this.maxEstimatedDelay = const Duration(minutes: 60),
   });
 
   /// Least time at the terminus between arriving and leaving again.
   final Duration turnaround;
 
-  /// Only departures leaving the terminus within this time are considered.
+  /// Look-ahead: only departures leaving the terminus, and buses reaching
+  /// it, within this time are considered; beyond it there's no prediction.
   final Duration horizon;
 
   /// Buses looked up per terminus (one trip request each), the ones closest
@@ -27,6 +29,11 @@ class ReturnPolicy {
   /// A bus's last stop counts as the terminus within this distance (the
   /// arrival and departure poles are often a road apart).
   final double maxEndDistanceMeters;
+
+  /// A bus that could only leave this much later than the timetable is more
+  /// likely to run a later departure (another bus covers this one): the
+  /// departure stays on the timetable and the bus goes to the next one.
+  final Duration maxEstimatedDelay;
 }
 
 const kReturnPolicy = ReturnPolicy();
@@ -105,6 +112,9 @@ class ReturnEstimator {
             .map((v) => source.tripEnd(v).catchError((Object _) => null))))
         .nonNulls
         .where((e) => distanceMeters(e.position, q.origin.position) <= policy.maxEndDistanceMeters)
+        // A run resolved to another service day (around midnight) ends far
+        // off: not this bus's trip.
+        .where((e) => e.time.isBefore(now.add(policy.horizon)))
         .map((e) => e.time.isBefore(now) ? now : e.time) // already there
         .toList()
       ..sort();
@@ -113,10 +123,16 @@ class ReturnEstimator {
     var b = 0;
     for (final r in needing) {
       if (b >= ends.length) break;
-      final ready = ends[b++].add(policy.turnaround);
+      final ready = ends[b].add(policy.turnaround);
+      final delay = ready.difference(r.scheduled);
+      // Too late for this one (and every later bus is later still): it
+      // stays on the timetable, this bus goes to the next departure. A live
+      // departure keeps its bus whatever the timetable says.
+      if (!r.realtime && delay > policy.maxEstimatedDelay) continue;
+      b++;
       if (r.realtime) continue; // its forecast already counts on a bus
-      out[r.tripId] = ready.isAfter(r.scheduled)
-          ? ReturnEstimate(Certainty.estimated, delay: ready.difference(r.scheduled))
+      out[r.tripId] = delay > Duration.zero
+          ? ReturnEstimate(Certainty.estimated, delay: delay)
           : const ReturnEstimate(Certainty.returning);
     }
     return out;

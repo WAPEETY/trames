@@ -66,6 +66,8 @@ class Itinerary {
     this.base,
     this.walkSlots = const {},
     this.walkOptions = const {},
+    this.rideChoices,
+    this.missedConnection = false,
   });
 
   final DateTime start;
@@ -83,6 +85,27 @@ class Itinerary {
   /// For a walk leg (by index in [legs]) that replaces a ride: the lines that
   /// could do that stretch instead (swipe options), e.g. ["3BUS"].
   final Map<int, List<String>> walkOptions;
+
+  /// Which variant each ride slot of [base] uses (see TripVariants), so the
+  /// trip view opens on the same buses; null = the defaults.
+  final List<int>? rideChoices;
+
+  /// A ride runs late (the app's estimate) and no bus makes the next
+  /// connection any more: the times shown can't really be made.
+  final bool missedConnection;
+
+  /// Same itinerary, flagged as missing a connection.
+  Itinerary withMissedConnection() => Itinerary(
+        start: start,
+        end: end,
+        legs: legs,
+        transfers: transfers,
+        base: base,
+        walkSlots: walkSlots,
+        walkOptions: walkOptions,
+        rideChoices: rideChoices,
+        missedConnection: true,
+      );
 
   bool get walkOnly => transitLegs.isEmpty;
 
