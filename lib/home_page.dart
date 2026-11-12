@@ -24,7 +24,7 @@ import 'swipe_slot.dart';
 
 /// Free vector tiles from OpenFreeMap (OSM data, no API key).
 const kMapStyleLight = 'https://tiles.openfreemap.org/styles/positron';
-const kMapStyleDark = 'https://tiles.openfreemap.org/styles/dark';
+const kMapStyleDark = 'https://tiles.openfreemap.org/styles/fiord';
 
 const kLegPalette = ['#D81B60', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00897B'];
 const kWalkColor = '#9E9E9E';
