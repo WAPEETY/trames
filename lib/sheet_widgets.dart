@@ -201,7 +201,12 @@ class NearbyDepartureRow extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final firstMin = minutesUntil(row.next.first.time);
-    final later = row.next.skip(1).map((d) => minutesUntil(d.time)).where((m) => m > firstMin).take(2).map((m) => '$m′').join(', ');
+    final soon = row.next.skip(1).where((d) => minutesUntil(d.time) > firstMin).take(2);
+    // Like the big number: clock times on a timetable-only row, else minutes.
+    final later = (certainty == Certainty.scheduled
+            ? soon.map((d) => hm(d.time))
+            : soon.map((d) => '${minutesUntil(d.time)}′'))
+        .join(', ');
     return Padding(
       padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
       child: Row(children: [

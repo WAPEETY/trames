@@ -91,7 +91,10 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
           start: _time(it['startTime']),
           end: _time(it['endTime']),
           transfers: it['transfers'] as int? ?? 0,
-          legs: [for (final l in it['legs'] as List) _leg(l)],
+          legs: [
+            for (final l in it['legs'] as List)
+              if (!_sameStopWalk(l as Map<String, dynamic>)) _leg(l),
+          ],
         );
     return [
       for (final it in d['itineraries'] as List) parse(it as Map<String, dynamic>),
@@ -174,9 +177,21 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     );
   }
 
+  /// A "walk" that doesn't go anywhere: MOTIS puts one between two rides
+  /// from the same stop (0 m, just the minimum transfer time). Not a leg:
+  /// the rides' own times still have to connect.
+  static bool _sameStopWalk(Map<String, dynamic> j) {
+    if (j['mode'] != 'WALK') return false;
+    final from = (j['from'] as Map?)?['stopId'], to = (j['to'] as Map?)?['stopId'];
+    return (from != null && from == to) || (j['distance'] as num?) == 0;
+  }
+
   /// An alternative is `[ingress walk, transit, egress walk]`.
   LegAlternative? _alternative(List legs) {
-    final parsed = [for (final l in legs) _leg(l as Map<String, dynamic>)];
+    final parsed = [
+      for (final l in legs)
+        if (!_sameStopWalk(l as Map<String, dynamic>)) _leg(l),
+    ];
     return parsed.any((l) => l.transit) ? LegAlternative(parsed) : null;
   }
 
