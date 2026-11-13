@@ -9,7 +9,10 @@
 - **tags** `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, `vX.Y.Z`: the `release` workflow
   builds signed per-ABI APKs (arm64-v8a, armeabi-v7a, x86_64) and publishes
   them to Forgejo releases (alpha/beta as
-  prereleases) with a changelog from the commit messages.
+  prereleases) with a changelog from the commit messages. In parallel the
+  `web` job builds the web app and uploads it over SFTP to
+  `/sites/trames.realac.ci` (secret `SSH_PRIVATE_KEY`; optional repo variable
+  `CORS_PROXY` for live bus positions in the browser).
 
 Start a release with `just`:
 
@@ -62,6 +65,7 @@ for local builds. CI derives:
    | `ANDROID_KEYSTORE_PASSWORD` | store password |
    | `ANDROID_KEY_ALIAS` | `upload` |
    | `ANDROID_KEY_PASSWORD` | key password |
+   | `SSH_PRIVATE_KEY` | key of the `pages` SFTP user (web deploy) |
    | `RELEASE_TOKEN` | optional: access token with `write:repository`, only if the automatic token can't create releases |
 
 4. Make sure a runner with the `docker` label is available to the repository.

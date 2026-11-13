@@ -1,5 +1,6 @@
 # Pushing a tag vX.Y.Z[-alpha.N|-beta.N] (see `just release`) builds the signed
-# APK and publishes it as a Forgejo release. alpha/beta are marked prerelease.
+# APK and publishes it as a Forgejo release (alpha/beta marked prerelease), and
+# builds the web app and deploys it to trames.realac.ci.
 name: release
 
 on:
@@ -65,3 +66,43 @@ jobs:
           done
           (cd dist && sha256sum *.apk > SHA256SUMS)
           tools/ci/publish-release.sh dist/*
+
+  web:
+    runs-on: docker
+    container:
+      image: ghcr.io/gmeligio/flutter-android:3.50.0
+      options: --user root
+    steps:
+      - name: Checkout
+        run: |
+          git config --global --add safe.directory '*'
+          git init -q .
+          url="${{ github.server_url }}/${{ github.repository }}.git"
+          git remote add origin "${url/:\/\//://ci:${{ github.token }}@}"
+          git fetch -q --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          git checkout -q --detach "${{ github.sha }}"
+          git log -1 --oneline
+      - name: Tag must be on main
+        run: |
+          git merge-base --is-ancestor HEAD origin/main ||
+            { echo "::error::${{ github.ref_name }} is not on main"; exit 1; }
+      - run: flutter pub get
+      - name: Build web
+        # Browsers can't read the operator's GPS feed directly (no CORS
+        # headers): set the CORS_PROXY repo variable (e.g.
+        # https://proxy.example/?url=) for live positions on the site.
+        run: flutter build web --release --dart-define=CORS_PROXY="${{ vars.CORS_PROXY }}"
+      - name: Deploy (SFTP)
+        # Plain sftp instead of an action: the image has no Node. Files are
+        # overwritten in place; ones no longer built are left on the server.
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          apt-get update -qq
+          DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends openssh-client >/dev/null
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy && chmod 600 ~/.ssh/deploy
+          echo 'put -r build/web/* /sites/trames.realac.ci' > deploy.sftp
+          sftp -b deploy.sftp -i ~/.ssh/deploy -P 222 \
+            -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            pages@192.168.188.12
