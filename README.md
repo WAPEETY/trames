@@ -1,17 +1,16 @@
-# roma_transit
+# Trames
 
-A new Flutter project.
+**Trames** is a public transport app, mainly focussed on Rome. It answers one question: when will a bus actually reach you?
 
-## Getting Started
+It follows Roma Mobilità's live GPS feed for buses and trams. Built on open data and OpenStreetMap maps.
 
-This project is a starting point for a Flutter application.
+## Why Trames?
 
-A few resources to get you started if this is your first Flutter project:
+[trāmĕs], tramitis
 
-- [Learn Flutter](https://docs.flutter.dev/get-started/learn-flutter)
-- [Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Flutter learning resources](https://docs.flutter.dev/reference/learning-resources)
+Sostantivo maschile III declinazione
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+1 scorciatoia, via traversa, strada secondaria<br />
+2 sentiero, cammino, passaggio<br />
+3 (in senso figurato) strada, percorso, corso<br />
+4 (in senso figurato) ramo di una famiglia
