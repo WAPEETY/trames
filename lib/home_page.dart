@@ -1497,8 +1497,18 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(width: 8),
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text('${hm(it.start)} → ${hm(it.end)}',
-                    style: emphasized(context).headlineSmall.copyWith(color: cs.onSurface)),
+                Semantics(
+                  label: 'from ${hm(it.start)} to ${hm(it.end)}',
+                  excludeSemantics: true,
+                  child: Row(children: [
+                    Text(hm(it.start), style: emphasized(context).headlineSmall.copyWith(color: cs.onSurface)),
+                    Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 6),
+                      child: Icon(Icons.arrow_forward_rounded, size: 22, color: cs.onSurfaceVariant),
+                    ),
+                    Text(hm(it.end), style: emphasized(context).headlineSmall.copyWith(color: cs.onSurface)),
+                  ]),
+                ),
                 Text(
                   '${it.duration.inMinutes} min · ${it.transfers} transfer${it.transfers == 1 ? '' : 's'}'
                   ' · to ${to?.name ?? ''}',
