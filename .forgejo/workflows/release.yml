@@ -86,6 +86,8 @@ jobs:
         run: |
           git merge-base --is-ancestor HEAD origin/main ||
             { echo "::error::${{ github.ref_name }} is not on main"; exit 1; }
+      # The image is set up for Android only.
+      - run: flutter config --enable-web
       - run: flutter pub get
       - name: Build web
         # Browsers can't read the operator's GPS feed directly (no CORS
