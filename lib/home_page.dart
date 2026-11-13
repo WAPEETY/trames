@@ -79,6 +79,7 @@ class _HomePageState extends State<HomePage> {
   /// Live buses by raw trip id, from the GPS feed, refreshed with the
   /// departures and the routes. Null with no GPS feed here (or it failed):
   /// then any live time counts as a bus on its way.
+  /// Keyed by trip id and by run key (see indexVehicles).
   Map<String, Vehicle>? liveVehicles;
 
   Future<Map<String, Vehicle>?> _fetchVehicles() async {
@@ -86,7 +87,7 @@ class _HomePageState extends State<HomePage> {
     if (f == null) return null;
     try {
       final snap = await f.vehicles();
-      return {for (final v in snap.vehicles) ?v.tripId: v};
+      return indexVehicles(snap.vehicles);
     } catch (_) {
       return null;
     }
@@ -102,12 +103,15 @@ class _HomePageState extends State<HomePage> {
 
   /// How sure a time is: bus on the way, not departed yet, a bus coming back
   /// around, or timetable only.
-  Certainty _certainty(bool realtime, String? tripId) => certaintyOf(
+  Certainty _certainty(bool realtime, String? tripId, [String? runKey]) => certaintyOf(
         realtime: realtime,
         tripId: tripId,
+        runKey: runKey,
         vehicles: liveVehicles,
         returns: to != null ? routeReturns : boardReturns,
       );
+
+  Certainty _depCertainty(Departure d) => _certainty(d.realtime, d.tripId, d.runKey);
 
   /// Looks for buses coming back to run timetable-only departures: one
   /// query per line and terminus, soonest departures first. Only for lines
@@ -766,6 +770,12 @@ class _HomePageState extends State<HomePage> {
         ]));
   }
 
+  /// Run key -> trip id of each ride (see LiveBusTracker.track).
+  Map<String, String> _legRuns(Itinerary it) => {
+        for (final l in it.transitLegs)
+          if (l.runKey != null && l.tripId != null) l.runKey!: l.tripId!,
+      };
+
   Map<String, String> _legColors(Itinerary it) {
     final colors = <String, String>{};
     var i = 0;
@@ -934,7 +944,7 @@ class _HomePageState extends State<HomePage> {
       variants = v;
       selected = v.current;
     });
-    tracker.track(_legColors(v.current));
+    tracker.track(_legColors(v.current), runs: _legRuns(v.current));
     _loadTripPaths(v.current);
     _drawSelected();
     _fetchTripWalks(v, all: true);
@@ -956,7 +966,7 @@ class _HomePageState extends State<HomePage> {
     // The real walk turned out too long to make a connection: back to rides.
     if (!v.feasible) v.restore(v.defaults);
     setState(() => selected = v.current);
-    tracker.track(_legColors(v.current));
+    tracker.track(_legColors(v.current), runs: _legRuns(v.current));
     _drawSelected(fit: false);
   }
 
@@ -966,7 +976,7 @@ class _HomePageState extends State<HomePage> {
     if (v == null) return;
     final kept = v.choose(slot, variant);
     setState(() => selected = v.current);
-    tracker.track(_legColors(v.current));
+    tracker.track(_legColors(v.current), runs: _legRuns(v.current));
     _loadTripPaths(v.current);
     _drawSelected(fit: false);
     // A new walk (e.g. two walked legs merged) may need its street route.
@@ -1270,16 +1280,17 @@ class _HomePageState extends State<HomePage> {
 
   /// A route goes under Live when its first ride is backed by a real bus.
   bool _routeLive(RouteGroup g) =>
-      g.isLive || g.best.transitLegs.take(1).any((l) => _certainty(l.realtime, l.tripId) != Certainty.scheduled);
+      g.isLive || g.best.transitLegs.take(1).any((l) => _certainty(l.realtime, l.tripId, l.runKey) != Certainty.scheduled);
 
   /// Like [_certainty], from the buses the tracker follows (trip and line
   /// views, polled live): a followed trip with no bus yet is waiting.
-  Certainty _trackedCertainty(bool realtime, String? tripId) => certaintyOf(
+  Certainty _trackedCertainty(bool realtime, String? tripId, [String? runKey]) => certaintyOf(
         realtime: realtime,
         tripId: tripId,
+        runKey: runKey,
         vehicles: backend.vehicles == null || tracker.lastError != null
             ? null
-            : {for (final e in tracker.buses.entries) e.key: e.value.vehicle},
+            : indexVehicles(tracker.buses.values.map((b) => b.vehicle)),
         returns: routeReturns,
       );
 
@@ -1393,8 +1404,8 @@ class _HomePageState extends State<HomePage> {
         // back around), then timetable-only; each keeps the soonest-first
         // order.
         for (final (live, list) in [
-          (true, nearby.where((r) => _certainty(r.next.first.realtime, r.next.first.tripId) != Certainty.scheduled).toList()),
-          (false, nearby.where((r) => _certainty(r.next.first.realtime, r.next.first.tripId) == Certainty.scheduled).toList()),
+          (true, nearby.where((r) => _depCertainty(r.next.first) != Certainty.scheduled).toList()),
+          (false, nearby.where((r) => _depCertainty(r.next.first) == Certainty.scheduled).toList()),
         ])
           if (list.isNotEmpty) ...[
             SliverToBoxAdapter(child: RouteSectionLabel(live: live, count: list.length)),
@@ -1404,7 +1415,7 @@ class _HomePageState extends State<HomePage> {
               itemBuilder: (_, i) =>
                   NearbyDepartureRow(
                     row: list[i],
-                    certainty: _certainty(list[i].next.first.realtime, list[i].next.first.tripId),
+                    certainty: _depCertainty(list[i].next.first),
                     showStop: filterStop == null,
                   ),
               onTap: (i) => _openLine(
@@ -1459,7 +1470,7 @@ class _HomePageState extends State<HomePage> {
               itemBuilder: (_, i) => RouteGroupRow(
                 group: list[i],
                 colorFor: _colorFor,
-                certaintyFor: (l) => _certainty(l.realtime, l.tripId),
+                certaintyFor: (l) => _certainty(l.realtime, l.tripId, l.runKey),
               ),
               onTap: (i) => _select(list[i].best),
             ),
@@ -1529,7 +1540,7 @@ class _HomePageState extends State<HomePage> {
             color: _colorFor(it, l),
             bus: tracker.buses[l.tripId],
             waitMinutes: wait,
-            certainty: _trackedCertainty(l.realtime, l.tripId),
+            certainty: _trackedCertainty(l.realtime, l.tripId, l.runKey),
           );
           final v = variants;
           final slot = v?.slotOfLeg(i);

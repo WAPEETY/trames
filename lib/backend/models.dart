@@ -168,6 +168,7 @@ class Leg {
     this.intermediateStops = 0,
     this.alternatives = const [],
     this.origin,
+    this.runKey,
   });
 
   /// WALK, BUS, TRAM, SUBWAY, RAIL, ...
@@ -202,6 +203,9 @@ class Leg {
   /// Where the ride's trip starts (its terminus), when the planner says.
   final TripOrigin? origin;
 
+  /// The run regardless of trip id (see [runKeyOf]).
+  final String? runKey;
+
   Duration get duration => end.difference(start);
 
   /// Same leg moved in time (used to re-time walks when a ride is swapped).
@@ -232,6 +236,7 @@ class Leg {
       intermediateStops: intermediateStops,
       alternatives: alternatives ?? this.alternatives,
       origin: origin,
+      runKey: runKey,
     );
   }
 }
@@ -266,15 +271,32 @@ class Stop {
 String stopCodeFromId(String id) => id.split(RegExp(r'[_:]')).last;
 
 class Departure {
-  Departure({required this.time, required this.realtime, this.delaySeconds, this.tripId, this.backendTripId, this.origin});
+  Departure({
+    required this.time,
+    required this.realtime,
+    this.delaySeconds,
+    this.tripId,
+    this.backendTripId,
+    this.origin,
+    this.runKey,
+  });
   final DateTime time;
+
+  /// The run regardless of trip id (see [runKeyOf]).
+  final String? runKey;
 
   /// Where this trip starts (its terminus), when the backend says.
   final TripOrigin? origin;
 
   /// Same departure at another time (an estimate, see [ReturnEstimate]).
-  Departure at(DateTime t) =>
-      Departure(time: t, realtime: realtime, delaySeconds: delaySeconds, tripId: tripId, backendTripId: backendTripId, origin: origin);
+  Departure at(DateTime t) => Departure(
+      time: t,
+      realtime: realtime,
+      delaySeconds: delaySeconds,
+      tripId: tripId,
+      backendTripId: backendTripId,
+      origin: origin,
+      runKey: runKey);
   final bool realtime;
   final int? delaySeconds;
   final String? tripId;
@@ -326,6 +348,10 @@ class Vehicle {
   /// Unknown position in the trip counts as started.
   bool get started => stopSequence == null || stopSequence! > 1;
 
+  /// The run regardless of trip id (see [runKeyOf]).
+  String? get runKey => runKeyOf(routeShortName, directionId,
+      startDate == null || startTime == null ? null : gtfsTime(startDate!, startTime!));
+
   /// GTFS-RT trip descriptor: service day (YYYYMMDD) and first departure
   /// (HH:MM:SS, may exceed 24h) of the trip being run, and its direction.
   /// Together with [tripId] they identify the trip in a planner.
@@ -353,6 +379,31 @@ class Vehicle {
 ///  * [moving]: its bus is on the way.
 enum Certainty { scheduled, estimated, returning, waiting, moving }
 
+/// GTFS date (YYYYMMDD) + time (H:MM[:SS], may pass 24:00) as local time.
+DateTime? gtfsTime(String date, String time) {
+  final d = RegExp(r'^(\d{4})(\d{2})(\d{2})$').firstMatch(date);
+  final t = RegExp(r'^(\d+):(\d{2})').firstMatch(time);
+  if (d == null || t == null) return null;
+  return DateTime(int.parse(d[1]!), int.parse(d[2]!), int.parse(d[3]!))
+      .add(Duration(hours: int.parse(t[1]!), minutes: int.parse(t[2]!)));
+}
+
+/// A vehicle run by line, direction and when it leaves its first stop,
+/// whatever its trip id: Rome's timetable lists some night runs twice
+/// (`0#4103-1` at 02:00 and `0#4103-13` at 26:00 the day before), and the
+/// planner and the GPS feed may each use a different one.
+String? runKeyOf(String? line, int? directionId, DateTime? start) => line == null || directionId == null || start == null
+    ? null
+    : 'run|${line.toLowerCase()}|$directionId|${start.millisecondsSinceEpoch ~/ 60000}';
+
+/// Live buses by trip id and by run key ([runKeyOf]).
+Map<String, Vehicle> indexVehicles(Iterable<Vehicle> vehicles) => {
+      for (final v in vehicles) ...{
+        ?v.tripId: v,
+        ?v.runKey: v,
+      },
+    };
+
 /// Where a trip starts: its first stop (the terminus).
 class TripOrigin {
   const TripOrigin({required this.stopId, required this.position});
@@ -378,10 +429,12 @@ Certainty certaintyOf({
   required String? tripId,
   required Map<String, Vehicle>? vehicles,
   Map<String, ReturnEstimate>? returns,
+  String? runKey,
 }) {
   if (!realtime) return (tripId == null ? null : returns?[tripId])?.certainty ?? Certainty.scheduled;
   if (vehicles == null) return Certainty.moving;
-  final v = tripId == null ? null : vehicles[tripId];
+  // By trip id, else by run: the same run can be listed under two ids.
+  final v = (tripId == null ? null : vehicles[tripId]) ?? (runKey == null ? null : vehicles[runKey]);
   return v != null && v.started ? Certainty.moving : Certainty.waiting;
 }
 

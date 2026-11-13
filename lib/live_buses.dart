@@ -69,9 +69,12 @@ class LiveBusTracker {
   Timer? _frame;
   bool _pushing = false;
 
-  void track(Map<String, String> tripColors) {
+  /// [runs]: run key (see runKeyOf) -> trip id of [tripColors], to follow a
+  /// bus the feed lists under another id of the same run.
+  void track(Map<String, String> tripColors, {Map<String, String> runs = const {}}) {
     stop();
     _trips = tripColors;
+    _runs = runs;
     if (_trips.isEmpty) return;
     _fetch();
     _poll = Timer.periodic(pollInterval, (_) => _fetch());
@@ -87,6 +90,7 @@ class LiveBusTracker {
     _poll = Timer.periodic(pollInterval, (_) => _fetch());
   }
 
+  Map<String, String> _runs = {};
   String? _line;
   String _lineColor = '#000000';
 
@@ -99,6 +103,7 @@ class LiveBusTracker {
     _poll = _frame = null;
     buses.clear();
     _trips = {};
+    _runs = {};
     _line = null;
     lastFeed = null;
     onFrame(_geojson());
@@ -116,8 +121,10 @@ class LiveBusTracker {
       lastError = null;
       final seen = <String>{};
       for (final v in snap.vehicles) {
-        final trip = v.tripId;
+        var trip = v.tripId;
         if (trip == null) continue;
+        // Same run under another trip id: file it under the planned one.
+        if (line == null && !_trips.containsKey(trip)) trip = _runs[v.runKey] ?? trip;
         final String color;
         if (line != null) {
           if (v.routeShortName?.toLowerCase() != line.toLowerCase()) continue;

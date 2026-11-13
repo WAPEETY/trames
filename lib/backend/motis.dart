@@ -47,6 +47,14 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
   static DateTime _time(String s) => DateTime.parse(s).toLocal();
   static LatLng _pos(Map<String, dynamic> j) => LatLng((j['lat'] as num).toDouble(), (j['lon'] as num).toDouble());
 
+  /// [runKeyOf] from a MOTIS trip id (its service date and first departure)
+  /// and the trip's line and direction.
+  static String? _runKey(Object? tripId, Object? line, Object? direction) {
+    if (tripId is! String || line is! String) return null;
+    final m = RegExp(r'^(\d{8})_(\d+:\d{2})_').firstMatch(tripId);
+    return m == null ? null : runKeyOf(line, int.tryParse('$direction'), gtfsTime(m[1]!, m[2]!));
+  }
+
   /// The trip's first stop (`tripFrom` on legs and stop times).
   static TripOrigin? _origin(Object? j) => switch (j) {
         {'stopId': final String id, 'lat': num _, 'lon': num _} => TripOrigin(stopId: id, position: _pos(j as Map<String, dynamic>)),
@@ -171,6 +179,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
       arrivalDelaySeconds: transit && scheduledEnd != null ? end.difference(scheduledEnd).inSeconds : null,
       intermediateStops: (j['intermediateStops'] as List?)?.length ?? 0,
       origin: transit ? _origin(j['tripFrom']) : null,
+      runKey: transit ? _runKey(j['tripId'], j['routeShortName'] ?? j['displayName'], j['directionId']) : null,
       alternatives: [
         for (final alt in (j['alternatives'] as List?) ?? const []) ?_alternative(alt as List),
       ],
@@ -478,6 +487,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
           tripId: rawTripId(s['tripId'] as String?),
           backendTripId: s['tripId'] as String?,
           origin: _origin(s['tripFrom']),
+          runKey: _runKey(s['tripId'], s['routeShortName'] ?? s['displayName'], s['directionId']),
         ),
       ));
     }

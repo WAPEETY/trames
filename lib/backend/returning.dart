@@ -100,6 +100,7 @@ class ReturnEstimator {
     final direction = runs.map((r) => r.directionId).nonNulls.firstOrNull;
     final own = {for (final r in runs) r.tripId};
     final candidates = vehicles.values
+        .toSet() // indexed by trip id and run key: each bus twice
         .where((v) =>
             v.routeShortName?.toLowerCase() == line &&
             !own.contains(v.tripId) &&

@@ -201,15 +201,17 @@ List<BoardRow> groupDepartures(
 
 /// Removes departures whose bus has already gone by: timetable-only (no
 /// prediction for this stop) while its trip is out on the road in the live
-/// feed ([runningTrips], raw GTFS trip ids). The operator only predicts the
+/// feed ([runningTrips]: raw GTFS trip ids and run keys, see
+/// [indexVehicles]). The operator only predicts the
 /// stops still ahead, so a running trip with no prediction here has passed
 /// it, e.g. a bus 13 minutes early, still listed at its timetable time.
 /// Rows left with no departure are dropped.
 List<BoardRow> dropPassedDepartures(List<BoardRow> rows, Set<String> runningTrips) {
   if (runningTrips.isEmpty) return rows;
+  bool running(Departure d) => runningTrips.contains(d.tripId) || runningTrips.contains(d.runKey);
   return [
     for (final r in rows)
-      if (r.next.where((d) => d.realtime || !runningTrips.contains(d.tripId)).toList() case final next
+      if (r.next.where((d) => d.realtime || !running(d)).toList() case final next
           when next.isNotEmpty)
         next.length == r.next.length ? r : BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: next),
   ];
