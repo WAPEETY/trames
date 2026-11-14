@@ -11,8 +11,9 @@
   them to Forgejo releases (alpha/beta as
   prereleases) with a changelog from the commit messages. In parallel the
   `web` job builds the web app and uploads it over SFTP to
-  `/sites/trames.realac.ci` (secret `SSH_PRIVATE_KEY`; optional repo variable
-  `CORS_PROXY` for live bus positions in the browser).
+  `/sites/trames.realac.ci` (secret `SSH_PRIVATE_KEY`). Live data comes
+  from Tramite (`TRAMITE_URL` dart-define, default
+  https://tramite.realac.ci), which browsers can read directly.
 
 Start a release with `just`:
 

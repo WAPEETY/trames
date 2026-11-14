@@ -41,8 +41,8 @@ dependencies:
   material_3_expressive: ^1.2.0
   material_ui: ^1.11.0
   dynamic_color: ^2.1.0
-  gtfs_realtime_bindings: ^1.2.0
   shared_preferences: ^2.5.6
+  web: ^1.1.2
 
 dev_dependencies:
   flutter_test:

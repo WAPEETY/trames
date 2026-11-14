@@ -9,22 +9,21 @@ import 'backend.dart';
 ///
 /// Transitous (https://transitous.org) is a public MOTIS instance; a
 /// self-hosted MOTIS uses this same class with a different [baseUrl].
-class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, TripDetails, WalkRouter, ReturnSource {
+class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, TripDetails, WalkRouter {
   MotisClient({
     this.baseUrl = 'https://api.transitous.org',
     this.language = 'it',
     this.searchRadiusMeters = 500,
-    this.vehicleFeedId,
+    this.homeFeedId,
     this.walkingSpeedKmh,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
   final String baseUrl;
 
-  /// MOTIS feed id of the operator whose GTFS-RT vehicle feed is used, to
-  /// turn a live vehicle into a MOTIS trip id.
-  /// Set to the active city's feed (see CityConfig); null outside one.
-  String? vehicleFeedId;
+  /// MOTIS feed id of the active city (see CityConfig), to look up a typed
+  /// stop number there; null outside a configured city.
+  String? homeFeedId;
 
   /// Walking pace sent to MOTIS (null = its default, ~4.3 km/h).
   final double? walkingSpeedKmh;
@@ -46,14 +45,6 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
   static String _ll(LatLng p) => '${p.latitude},${p.longitude}';
   static DateTime _time(String s) => DateTime.parse(s).toLocal();
   static LatLng _pos(Map<String, dynamic> j) => LatLng((j['lat'] as num).toDouble(), (j['lon'] as num).toDouble());
-
-  /// [runKeyOf] from a MOTIS trip id (its service date and first departure)
-  /// and the trip's line and direction.
-  static String? _runKey(Object? tripId, Object? line, Object? direction) {
-    if (tripId is! String || line is! String) return null;
-    final m = RegExp(r'^(\d{8})_(\d+:\d{2})_').firstMatch(tripId);
-    return m == null ? null : runKeyOf(line, int.tryParse('$direction'), gtfsTime(m[1]!, m[2]!));
-  }
 
   /// The trip's first stop (`tripFrom` on legs and stop times).
   static TripOrigin? _origin(Object? j) => switch (j) {
@@ -179,7 +170,8 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
       arrivalDelaySeconds: transit && scheduledEnd != null ? end.difference(scheduledEnd).inSeconds : null,
       intermediateStops: (j['intermediateStops'] as List?)?.length ?? 0,
       origin: transit ? _origin(j['tripFrom']) : null,
-      runKey: transit ? _runKey(j['tripId'], j['routeShortName'] ?? j['displayName'], j['directionId']) : null,
+      fromStopId: transit ? from['stopId'] as String? : null,
+      toStopId: transit ? to['stopId'] as String? : null,
       alternatives: [
         for (final alt in (j['alternatives'] as List?) ?? const []) ?_alternative(alt as List),
       ],
@@ -263,72 +255,6 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     );
   }
 
-  /// MOTIS trip ids are `{service date}_{first departure HH:MM}_{feed}_{trip}`;
-  /// a GTFS-RT vehicle carries all of these.
-  @override
-  String? tripIdForVehicle(Vehicle v) {
-    final date = v.startDate, time = v.startTime, trip = v.tripId, feed = vehicleFeedId;
-    if (date == null || time == null || trip == null || feed == null || time.length < 5) return null;
-    return '${date}_${time.substring(0, 5)}_${feed}_$trip';
-  }
-
-  // ---- ReturnSource ----
-
-  /// Live data changes: these are kept a minute.
-  static const _fresh = Duration(minutes: 1);
-  final _runs = <String, (DateTime, Future<List<TerminusRun>>)>{};
-  final _ends = <String, (DateTime, Future<TripEnd?>)>{};
-
-  static Future<T> _cached<T>(Map<String, (DateTime, Future<T>)> cache, String key, Future<T> Function() load) {
-    final hit = cache[key];
-    if (hit != null && DateTime.now().difference(hit.$1) < _fresh) return hit.$2;
-    final f = load();
-    cache[key] = (DateTime.now(), f);
-    f.then<void>((_) {}, onError: (Object _) {
-      if (cache[key]?.$2 == f) cache.remove(key); // retry next time
-    });
-    return f;
-  }
-
-  @override
-  Future<List<TerminusRun>> departuresFrom(String stopId) => _cached(_runs, stopId, () async {
-        final d = await _get('/api/v6/stoptimes', {
-          'stopId': stopId,
-          'n': '30',
-          'radius': '0',
-          'exactRadius': 'true',
-        }) as Map<String, dynamic>;
-        return [
-          for (final s in d['stopTimes'] as List)
-            if (s['pickupDropoffType'] != 'NOT_ALLOWED' && s['cancelled'] != true && s['tripCancelled'] != true)
-              if ((s['place'] as Map)['scheduledDeparture'] case final String sched)
-                TerminusRun(
-                  tripId: rawTripId(s['tripId'] as String?) ?? '',
-                  line: s['routeShortName'] as String? ?? s['displayName'] as String? ?? '',
-                  scheduled: _time(sched),
-                  realtime: s['realTime'] as bool? ?? false,
-                  directionId: int.tryParse('${s['directionId']}'),
-                ),
-        ];
-      });
-
-  /// MOTIS predicts up to the second-to-last stop but leaves the last one on
-  /// the timetable: take the last live stop and add the timetabled minutes
-  /// from there to the end.
-  @override
-  Future<TripEnd?> tripEnd(Vehicle v) {
-    final id = tripIdForVehicle(v);
-    if (id == null) return Future.value();
-    return _cached(_ends, id, () async {
-      final t = _parseTrip(await _get('/api/v6/trip', {'tripId': id}) as Map<String, dynamic>);
-      final last = t.stops.lastOrNull;
-      if (last == null || last.scheduled == null) return null;
-      final live = t.stops.lastWhere((s) => s.live && s.time != null && s.scheduled != null, orElse: () => last);
-      final time = live == last ? (last.time ?? last.scheduled!) : live.time!.add(last.scheduled!.difference(live.scheduled!));
-      return TripEnd(position: last.position, time: time);
-    });
-  }
-
   // ---- PlaceSearch ----
 
   @override
@@ -345,7 +271,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     try {
       // The active city's feed, else whichever feed the stops around [near]
       // belong to (works in any city Transitous covers, no config needed).
-      final feed = vehicleFeedId ?? (near == null ? null : await _feedNear(near));
+      final feed = homeFeedId ?? (near == null ? null : await _feedNear(near));
       if (feed == null) return null;
       final d = await _get('/api/v6/stop', {'stopId': '${feed}_$code'}) as Map<String, dynamic>;
       final p = d['place'] as Map<String, dynamic>;
@@ -487,7 +413,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
           tripId: rawTripId(s['tripId'] as String?),
           backendTripId: s['tripId'] as String?,
           origin: _origin(s['tripFrom']),
-          runKey: _runKey(s['tripId'], s['routeShortName'] ?? s['displayName'], s['directionId']),
+          stopId: place['stopId'] as String?,
         ),
       ));
     }

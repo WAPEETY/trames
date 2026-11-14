@@ -26,7 +26,7 @@ List<Widget> lineSlivers(
   BuildContext context,
   LineState s, {
   required Color color,
-  /// Live buses of the line on the map; null where the city has no GPS feed.
+  /// Live buses of the line on the map; null where the city has no Tramite.
   required int? liveBuses,
   /// How sure the shown trip's live times are (see [certaintyOf]).
   required Certainty certainty,

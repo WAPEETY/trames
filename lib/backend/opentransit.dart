@@ -7,7 +7,7 @@ import 'backend.dart';
 
 /// opentransit.tech API (OpenTripPlanner 2 behind a FastAPI layer).
 /// Kept as an alternate backend; see config.dart.
-class OpenTransitClient implements TripPlanner, PlaceSearch, StopBoards, VehicleFeed {
+class OpenTransitClient implements TripPlanner, PlaceSearch, StopBoards {
   OpenTransitClient({this.baseUrl = 'https://api.opentransit.tech/v1/cities/roma', this.idPrefix = 'roma:', http.Client? client})
       : _client = client ?? http.Client();
 
@@ -131,23 +131,4 @@ class OpenTransitClient implements TripPlanner, PlaceSearch, StopBoards, Vehicle
     return groupDepartures(stop, items);
   }
 
-  @override
-  Future<VehicleSnapshot> vehicles() async {
-    final d = await _get('/vehicles', {});
-    return VehicleSnapshot(
-      feedTimestamp: DateTime.parse(d['feedTimestamp'] as String),
-      vehicles: [
-        for (final j in d['vehicles'] as List)
-          Vehicle(
-            id: j['id'] as String,
-            label: j['label'] as String? ?? '',
-            tripId: _raw(j['tripId'] as String?),
-            routeShortName: j['routeShortName'] as String?,
-            position: _pos(j),
-            timestamp: DateTime.parse(j['timestamp'] as String),
-            bearing: (j['bearing'] as num?)?.toDouble(),
-          ),
-      ],
-    );
-  }
 }

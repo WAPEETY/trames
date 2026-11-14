@@ -9,6 +9,7 @@ import 'models.dart';
 
 export 'cities.dart';
 export 'models.dart';
+export 'tramite.dart';
 
 /// The app talks to transit data only through these four capabilities.
 /// Each can come from a different source; [TransitBackend] bundles one of each.
@@ -44,9 +45,6 @@ abstract interface class TripDetails {
   /// Full run of a trip by the planner's trip id.
   Future<TripInfo> trip(String backendTripId);
 
-  /// The planner's id for the trip a live [vehicle] is running, if it can be
-  /// derived (needs the GTFS-RT start date/time), else null.
-  String? tripIdForVehicle(Vehicle vehicle);
 }
 
 abstract interface class WalkRouter {
@@ -87,68 +85,22 @@ abstract interface class TripPaths {
   Future<List<LatLng>> tripPath(Leg leg);
 }
 
-abstract interface class VehicleFeed {
-  /// Live vehicle positions; [Vehicle.tripId] is the raw GTFS trip_id.
-  Future<VehicleSnapshot> vehicles();
-}
-
-/// What [ReturnEstimator] needs from a backend.
-abstract interface class ReturnSource {
-  /// Trips leaving [stopId] (a terminus) from now on, any line.
-  Future<List<TerminusRun>> departuresFrom(String stopId);
-
-  /// Where and when the trip [v] is running ends, best estimate (live where
-  /// known); null when the backend doesn't know the trip.
-  Future<TripEnd?> tripEnd(Vehicle v);
-}
-
-/// A trip leaving its first stop.
-class TerminusRun {
-  const TerminusRun({
-    required this.tripId,
-    required this.line,
-    required this.scheduled,
-    required this.realtime,
-    this.directionId,
-  });
-
-  /// Raw GTFS trip id.
-  final String tripId;
-  final String line;
-
-  /// Timetabled departure from the terminus.
-  final DateTime scheduled;
-  final bool realtime;
-  final int? directionId;
-}
-
-/// Last stop of a running trip and when the bus should get there.
-class TripEnd {
-  const TripEnd({required this.position, required this.time});
-  final LatLng position;
-  final DateTime time;
-}
-
 class TransitBackend {
   const TransitBackend({
     required this.name,
     required this.planner,
     required this.places,
     required this.stops,
-    this.vehicles,
     this.city,
     this.paths,
     this.trips,
     this.walks,
-    this.returns,
   });
 
   final String name;
   final TripPlanner planner;
   final PlaceSearch places;
   final StopBoards stops;
-  /// Live GPS positions; only where the city has a feed (see CityConfig).
-  final VehicleFeed? vehicles;
 
   /// The configured city this backend serves, or null (Transitous only).
   final CityConfig? city;
@@ -162,8 +114,6 @@ class TransitBackend {
   /// Optional: street walking routes, to offer walking instead of short rides.
   final WalkRouter? walks;
 
-  /// Optional: buses coming back from the other direction (needs [vehicles]).
-  final ReturnSource? returns;
 }
 
 /// Shared helpers for implementations.
@@ -199,46 +149,12 @@ List<BoardRow> groupDepartures(
   return rows.values.toList();
 }
 
-/// Removes departures whose bus has already gone by: timetable-only (no
-/// prediction for this stop) while its trip is out on the road in the live
-/// feed ([runningTrips]: raw GTFS trip ids and run keys, see
-/// [indexVehicles]). The operator only predicts the
-/// stops still ahead, so a running trip with no prediction here has passed
-/// it, e.g. a bus 13 minutes early, still listed at its timetable time.
-/// Rows left with no departure are dropped.
-List<BoardRow> dropPassedDepartures(List<BoardRow> rows, Set<String> runningTrips) {
-  if (runningTrips.isEmpty) return rows;
-  bool running(Departure d) => runningTrips.contains(d.tripId) || runningTrips.contains(d.runKey);
-  return [
-    for (final r in rows)
-      if (r.next.where((d) => d.realtime || !running(d)).toList() case final next
-          when next.isNotEmpty)
-        next.length == r.next.length ? r : BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: next),
-  ];
-}
-
 /// One row per bus (instead of per line), soonest first: for a single
 /// stop's board, so every live bus shows as live.
 List<BoardRow> boardPerDeparture(List<BoardRow> rows) => [
       for (final r in rows)
         for (final d in r.next) BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: [d]),
     ]..sort((a, b) => a.next.first.time.compareTo(b.next.first.time));
-
-/// Moves departures the app estimated itself ([Certainty.estimated]) to
-/// their estimated time; rows stay soonest first.
-List<BoardRow> applyReturnEstimates(List<BoardRow> rows, Map<String, ReturnEstimate> returns) {
-  if (returns.isEmpty) return rows;
-  return [
-    for (final r in rows)
-      BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: [
-        for (final d in r.next)
-          if (returns[d.tripId] case ReturnEstimate(certainty: Certainty.estimated, :final delay) when !d.realtime)
-            d.at(d.time.add(delay))
-          else
-            d,
-      ]..sort((a, b) => a.time.compareTo(b.time))),
-  ];
-}
 
 /// Orders search results for someone at [reference]: everything within
 /// [localKm] first, in the backend's own relevance order (name match), then

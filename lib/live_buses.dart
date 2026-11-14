@@ -4,7 +4,7 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'backend/backend.dart';
 
-/// A tracked bus: animates from where it is drawn now to the latest GPS fix.
+/// A bus on the map: animates from where it is drawn to its latest position.
 class TrackedBus {
   TrackedBus(this.vehicle, this.color)
       : _from = vehicle.position,
@@ -12,17 +12,18 @@ class TrackedBus {
         drawn = vehicle.position;
 
   Vehicle vehicle;
-  final String color;
+  String color;
   LatLng _from;
   LatLng _to;
   LatLng drawn;
   DateTime _animStart = DateTime.now();
 
-  void update(Vehicle v, Duration animDuration) {
+  void update(Vehicle v, String c) {
     _from = drawn;
     _to = v.position;
     _animStart = DateTime.now();
     vehicle = v;
+    color = c;
   }
 
   /// Returns true while still moving.
@@ -37,135 +38,70 @@ class TrackedBus {
   }
 }
 
-/// Polls vehicle positions for the trip ids of the selected itinerary and pushes
-/// interpolated positions to a GeoJSON source on the map.
+/// Draws a set of buses on a GeoJSON map source, animating each from where
+/// it is to its newest position. Whoever follows the buses (a ride, a line,
+/// the map area) pushes them with [show]; this only draws.
 ///
-/// Performance notes (the point of this PoC):
-///  * buses are a map layer, not Flutter widgets on top of the platform view;
-///  * the GeoJSON pushed over the platform channel is tiny (one point per bus);
-///  * pushes happen at [frameInterval] only while something is moving.
+/// Buses are a map layer, not widgets over the platform view; frames are
+/// pushed at [frameInterval] only while something moves.
 class LiveBusTracker {
   LiveBusTracker({
-    required this.feed,
     required this.onFrame,
-    required this.onSnapshot,
-    this.pollInterval = const Duration(seconds: 10),
+    this.animation = const Duration(seconds: 4),
     this.frameInterval = const Duration(milliseconds: 66),
   });
 
-  /// Live GPS source; null where the city has none (then nothing is tracked).
-  VehicleFeed? feed;
   final Future<void> Function(Map<String, dynamic> geojson) onFrame;
-  final void Function() onSnapshot;
-  final Duration pollInterval;
+
+  /// How long a bus takes to glide to a new position.
+  final Duration animation;
   final Duration frameInterval;
 
-  /// tripId -> leg color
-  Map<String, String> _trips = {};
-  final Map<String, TrackedBus> buses = {}; // keyed by tripId
+  /// Shown buses by key (a ride's trip id, or a vehicle id).
+  final Map<String, TrackedBus> buses = {};
+
+  /// Newest position time among the shown buses.
   DateTime? lastFeed;
-  String? lastError;
-  Timer? _poll;
   Timer? _frame;
   bool _pushing = false;
 
-  /// [runs]: run key (see runKeyOf) -> trip id of [tripColors], to follow a
-  /// bus the feed lists under another id of the same run.
-  void track(Map<String, String> tripColors, {Map<String, String> runs = const {}}) {
-    stop();
-    _trips = tripColors;
-    _runs = runs;
-    if (_trips.isEmpty) return;
-    _fetch();
-    _poll = Timer.periodic(pollInterval, (_) => _fetch());
+  /// Shows exactly [next] (key -> bus and colour): new ones appear, known
+  /// ones glide to their new position, missing ones go.
+  void show(Map<String, ({Vehicle vehicle, String color})> next) {
+    for (final MapEntry(:key, value: (:vehicle, :color)) in next.entries) {
+      final existing = buses[key];
+      if (existing == null) {
+        buses[key] = TrackedBus(vehicle, color);
+      } else if (existing.vehicle.timestamp != vehicle.timestamp || existing.color != color) {
+        existing.update(vehicle, color);
+      }
+    }
+    buses.removeWhere((k, _) => !next.containsKey(k));
+    lastFeed = buses.values.map((b) => b.vehicle.timestamp).fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
+    _frame ??= Timer.periodic(frameInterval, (_) => _tick());
   }
 
-  /// Follows every live vehicle of [line] (any trip, both directions), in
-  /// [color]. Buses that start running later are picked up on the next poll.
-  void trackLine(String line, String color) {
-    stop();
-    _line = line;
-    _lineColor = color;
-    _fetch();
-    _poll = Timer.periodic(pollInterval, (_) => _fetch());
-  }
-
-  Map<String, String> _runs = {};
-  String? _line;
-  String _lineColor = '#000000';
-
-  /// Latest snapshot of all vehicles (e.g. to list a line's directions).
-  VehicleSnapshot? lastSnapshot;
-
-  void stop() {
-    _poll?.cancel();
+  void clear() {
     _frame?.cancel();
-    _poll = _frame = null;
+    _frame = null;
     buses.clear();
-    _trips = {};
-    _runs = {};
-    _line = null;
     lastFeed = null;
     onFrame(_geojson());
   }
 
-  Future<void> _fetch() async {
-    try {
-      final f = feed;
-      if (f == null) return; // no live GPS in this city
-      final snap = await f.vehicles();
-      final line = _line;
-      if (_trips.isEmpty && line == null) return;
-      lastSnapshot = snap;
-      lastFeed = snap.feedTimestamp;
-      lastError = null;
-      final seen = <String>{};
-      for (final v in snap.vehicles) {
-        var trip = v.tripId;
-        if (trip == null) continue;
-        // Same run under another trip id: file it under the planned one.
-        if (line == null && !_trips.containsKey(trip)) trip = _runs[v.runKey] ?? trip;
-        final String color;
-        if (line != null) {
-          if (v.routeShortName?.toLowerCase() != line.toLowerCase()) continue;
-          color = _lineColor;
-        } else {
-          final c = _trips[trip];
-          if (c == null) continue;
-          color = c;
-        }
-        seen.add(trip);
-        final existing = buses[trip];
-        if (existing == null) {
-          buses[trip] = TrackedBus(v, color);
-        } else if (existing.vehicle.timestamp != v.timestamp) {
-          // Interpolate over one poll interval: continuous movement, ~1 poll of extra lag.
-          existing.update(v, pollInterval);
-        }
-      }
-      buses.removeWhere((k, _) => !seen.contains(k));
-      _startFrames();
-    } catch (e) {
-      lastError = '$e';
+  Future<void> _tick() async {
+    if (_pushing) return; // never queue frames behind a slow platform channel
+    var moving = false;
+    for (final b in buses.values) {
+      moving |= b.tick(animation);
     }
-    onSnapshot();
-  }
-
-  void _startFrames() {
-    _frame ??= Timer.periodic(frameInterval, (_) async {
-      if (_pushing) return; // never queue frames behind a slow platform channel
-      var moving = false;
-      for (final b in buses.values) {
-        moving |= b.tick(pollInterval);
-      }
-      _pushing = true;
-      await onFrame(_geojson());
-      _pushing = false;
-      if (!moving) {
-        _frame?.cancel();
-        _frame = null;
-      }
-    });
+    _pushing = true;
+    await onFrame(_geojson());
+    _pushing = false;
+    if (!moving) {
+      _frame?.cancel();
+      _frame = null;
+    }
   }
 
   Map<String, dynamic> _geojson() => {

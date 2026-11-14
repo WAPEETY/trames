@@ -37,13 +37,6 @@ void main() {
     print('${stops.first.name} ${stops.first.distanceMeters}m: ${rows.map((r) => '${r.line}->${r.headsign} ${r.next.length}x rt=${r.next.first.realtime}').join(', ')}');
   });
 
-  test('vehicles', () async {
-    final s = await b.vehicles!.vehicles();
-    // ignore: avoid_print
-    print('feed ${DateTime.now().toUtc().difference(s.feedTimestamp).inSeconds}s old, ${s.vehicles.length} vehicles, e.g. ${s.vehicles.first.routeShortName} [${s.vehicles.first.tripId}]');
-    expect(s.vehicles, isNotEmpty);
-  });
-
   test('grouped route search + leg alternatives', () async {
     final groups = await RouteSearch(b.planner).search(here, const LatLng(41.8902, 12.4922));
     expect(groups, isNotEmpty);
@@ -54,24 +47,21 @@ void main() {
     }
   }, timeout: const Timeout(Duration(seconds: 90)));
 
-  test('trip path + approach for a live vehicle', () async {
+  test('trip path of a ride', () async {
     final groups = await RouteSearch(b.planner).search(here, const LatLng(41.8902, 12.4922));
     final leg = groups.first.best.transitLegs.first;
     final path = await b.paths!.tripPath(leg);
-    final snap = await b.vehicles!.vehicles();
-    final bus = snap.vehicles.where((v) => v.tripId == leg.tripId).firstOrNull;
     // ignore: avoid_print
-    print('${leg.routeShortName} [${leg.tripId}] path ${path.length} pts, live bus: ${bus != null}'
-        '${bus == null ? '' : ', approach ${approachPath(path, bus.position, leg.from).length} pts'}');
+    print('${leg.routeShortName} [${leg.tripId}] path ${path.length} pts');
     expect(path.length, greaterThan(1));
   }, timeout: const Timeout(Duration(seconds: 90)));
 
-  test('line view: trip from a live vehicle, stops, search kinds', () async {
-    final snap = await b.vehicles!.vehicles();
-    final v = snap.vehicles.firstWhere((v) => b.trips!.tripIdForVehicle(v) != null);
-    final t = await b.trips!.trip(b.trips!.tripIdForVehicle(v)!);
+  test('line view: trip of a ride, stops, search kinds', () async {
+    final groups = await RouteSearch(b.planner).search(here, const LatLng(41.8902, 12.4922));
+    final leg = groups.first.best.transitLegs.first;
+    final t = await b.trips!.trip(leg.backendTripId!);
     // ignore: avoid_print
-    print('line ${v.routeShortName} dir ${v.directionId} -> ${t.line} "${t.headsign}" ${t.stops.length} stops, ${t.points.length} pts, rt=${t.realtime}');
+    print('line ${leg.routeShortName} -> ${t.line} "${t.headsign}" ${t.stops.length} stops, ${t.points.length} pts, rt=${t.realtime}');
     expect(t.stops.length, greaterThan(1));
     final places = await b.places.search('termini', near: here);
     // ignore: avoid_print

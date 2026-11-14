@@ -2,10 +2,10 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'models.dart';
 
-/// What the app knows about a city beyond Transitous: its feed id there and
-/// an optional live GPS feed. Anywhere without a config the app runs on
-/// Transitous alone (routes, departures, live times where Transitous has
-/// them), without live bus positions or line search.
+/// What the app knows about a city beyond Transitous: where to start without
+/// location, and its feed id there (stop-number search). Realtime extras
+/// don't depend on this list: Tramite says what it covers (see
+/// TramiteClient.covers).
 ///
 /// To add a city: add an entry to [kCities].
 class CityConfig {
@@ -15,7 +15,6 @@ class CityConfig {
     required this.area,
     required this.fallbackCenter,
     required this.motisFeedId,
-    this.vehicleFeedUrl,
   });
 
   final String id;
@@ -31,8 +30,6 @@ class CityConfig {
   /// stop-number search and to link live vehicles to Transitous trips.
   final String motisFeedId;
 
-  /// GTFS-realtime VehiclePositions feed (live GPS), if the city has one.
-  final String? vehicleFeedUrl;
 
   bool contains(LatLng p) =>
       p.latitude >= area.southwest.latitude &&
@@ -47,9 +44,11 @@ final kRomeConfig = CityConfig(
   area: LatLngBounds(southwest: const LatLng(41.65, 12.20), northeast: const LatLng(42.10, 12.85)),
   fallbackCenter: const Place(name: 'Roma Termini', position: LatLng(41.9010, 12.5013)),
   motisFeedId: 'it-Lazio-Rome',
-  // Roma Mobilità open data (no key). Its route_id is the public line name.
-  vehicleFeedUrl: 'https://romamobilita.it/wp-content/uploads/shared/rome_rtgtfs_vehicle_positions_feed.pb',
 );
+
+/// Our realtime service (https://git.marcorealacci.me/marcorealacci/tramite).
+/// Override with --dart-define=TRAMITE_URL=http://localhost:8080
+const kTramiteUrl = String.fromEnvironment('TRAMITE_URL', defaultValue: 'https://tramite.realac.ci');
 
 /// Supported cities. The first one is also where the app opens without
 /// location.

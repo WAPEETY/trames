@@ -4,7 +4,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
-import 'package:roma_transit/backend/models.dart';
 import 'package:roma_transit/backend/motis.dart';
 
 Map<String, dynamic> _place(String stop, double lat) =>
@@ -42,7 +41,8 @@ void main() {
     final client = MotisClient(client: MockClient((_) async => http.Response(body, 200)));
     final its = await client.plan(const LatLng(41.9, 12.5), const LatLng(41.91, 12.5));
     expect(its.single.legs.map((l) => l.routeShortName ?? 'walk'), ['walk', '88', '60', 'walk']);
-    // Run key from the trip id: 26:00 on the 12th = 02:00 on the 13th.
-    expect(its.single.legs[1].runKey, runKeyOf('88', 1, DateTime(2026, 11, 13, 2)));
+    // A ride knows its boarding and alighting stops (to follow it in Tramite).
+    expect(its.single.legs[1].fromStopId, 'it-Lazio-Rome_1');
+    expect(its.single.legs[1].toStopId, 'it-Lazio-Rome_2');
   });
 }

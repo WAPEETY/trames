@@ -90,10 +90,7 @@ jobs:
       - run: flutter config --enable-web
       - run: flutter pub get
       - name: Build web
-        # Browsers can't read the operator's GPS feed directly (no CORS
-        # headers): set the CORS_PROXY repo variable (e.g.
-        # https://proxy.example/?url=) for live positions on the site.
-        run: flutter build web --release --dart-define=CORS_PROXY="${{ vars.CORS_PROXY }}"
+        run: flutter build web --release
       - name: Deploy (SFTP)
         # Plain sftp instead of an action: the image has no Node. Files are
         # overwritten in place; ones no longer built are left on the server.

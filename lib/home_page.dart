@@ -10,10 +10,11 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 import 'backend/backend.dart';
 import 'backend/config.dart';
 import 'backend/estimated_rides.dart';
+import 'backend/live_connection.dart';
 import 'backend/motis.dart' show MotisClient;
-import 'backend/returning.dart';
 import 'backend/route_search.dart';
 import 'backend/trip_variants.dart';
+import 'area_buses.dart';
 import 'attribution.dart';
 import 'favorites.dart';
 import 'line_view.dart';
@@ -76,65 +77,86 @@ class _HomePageState extends State<HomePage> {
   // Departures for the visible map area (idle state).
   List<BoardRow> nearby = [];
 
-  /// Live buses by raw trip id, from the GPS feed, refreshed with the
-  /// departures and the routes. Null with no GPS feed here (or it failed):
-  /// then any live time counts as a bus on its way.
-  /// Keyed by trip id and by run key (see indexVehicles).
-  Map<String, Vehicle>? liveVehicles;
+  /// Tramite's view of the journeys' rides, by raw trip id: how sure each
+  /// is, its inferred time, its bus. Only for rides Tramite covers; kept in
+  /// step with the shown journeys by [_syncLegTopics].
+  final Map<String, TramiteRow> _legRows = {};
+  late final LiveTopics _legTopics = LiveTopics(live);
 
-  Future<Map<String, Vehicle>?> _fetchVehicles() async {
-    final f = backend.vehicles;
-    if (f == null) return null;
-    try {
-      final snap = await f.vehicles();
-      return indexVehicles(snap.vehicles);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  /// Timetable-only departures a bus coming back from the other direction
-  /// could run (see ReturnEstimator): for the stop board and for the routes.
-  Map<String, ReturnEstimate> boardReturns = {};
+  /// Timetable-only rides a known bus should run (from [_legRows]), moved to
+  /// that bus's time by applyEstimatedRides.
   Map<String, ReturnEstimate> routeReturns = {};
 
-  /// Board rows as fetched (before estimates), to rebuild [nearby].
-  List<BoardRow> _boardRows = [];
+  /// Board rows from Transitous (stops Tramite doesn't cover), and from
+  /// Tramite by stop id (pushed), to rebuild [nearby].
+  List<BoardRow> _transitousRows = [];
+  final Map<String, List<BoardRow>> _tramiteRows = {};
+  late final LiveTopics _boardTopics = LiveTopics(live);
 
-  /// How sure a time is: bus on the way, not departed yet, a bus coming back
-  /// around, or timetable only.
-  Certainty _certainty(bool realtime, String? tripId, [String? runKey]) => certaintyOf(
-        realtime: realtime,
-        tripId: tripId,
-        runKey: runKey,
-        vehicles: liveVehicles,
-        returns: to != null ? routeReturns : boardReturns,
-      );
+  /// The open line's buses.
+  late final LiveTopics _lineTopics = LiveTopics(live);
 
-  Certainty _depCertainty(Departure d) => _certainty(d.realtime, d.tripId, d.runKey);
+  /// How sure a ride's time is: what Tramite says for rides it covers;
+  /// otherwise live (counted as on its way: no way to tell) or timetable.
+  Certainty _certainty(bool realtime, String? tripId) =>
+      (tripId == null ? null : _legRows[tripId])?.departure.certainty ??
+      certaintyOf(realtime: realtime, tripId: tripId, returns: routeReturns);
 
-  /// Looks for buses coming back to run timetable-only departures: one
-  /// query per line and terminus, soonest departures first. Only for lines
-  /// all on the timetable here: one live departure (yellow or green) and
-  /// the line is left alone. Empty where the city has no GPS feed.
-  Future<Map<String, ReturnEstimate>> _estimateReturns(
-      Iterable<(String line, Departure departure)> departures, Map<String, Vehicle>? vehicles) async {
-    final source = backend.returns;
-    if (source == null || vehicles == null) return const {};
-    String key(String line, Departure d) => '${line.toLowerCase()}|${d.origin?.stopId}';
-    final live = {for (final (line, d) in departures) if (d.realtime) key(line, d)};
-    final soonest = departures
-        .where((e) => !e.$2.realtime && e.$2.origin != null && !live.contains(key(e.$1, e.$2)))
-        .toList()
-      ..sort((a, b) => a.$2.time.compareTo(b.$2.time));
-    return ReturnEstimator(source).estimate([for (final (line, d) in soonest) ReturnQuery(line, d.origin!)], vehicles);
+  Certainty _depCertainty(Departure d) => d.certainty ?? _certainty(d.realtime, d.tripId);
+
+  /// Follows, through Tramite, the rides of the shown journeys (the
+  /// selected one, else the whole list): one topic per ride at its boarding
+  /// stop. Rides Tramite doesn't cover keep Transitous's data.
+  void _syncLegTopics() {
+    final legs = selected?.transitLegs ?? [for (final it in _routeItineraries) ...it.transitLegs];
+    final wanted = <String, void Function(Object?)>{};
+    final trips = <String>{};
+    for (final l in legs) {
+      final stop = l.fromStopId, trip = l.backendTripId, raw = l.tripId;
+      if (stop == null || trip == null || raw == null || !tramite.covers(stop) || !tramite.covers(trip)) continue;
+      trips.add(raw);
+      wanted[TramiteClient.departuresTopic(stop, tripId: trip)] = (data) {
+        if (!mounted) return;
+        final row = TramiteClient.parseRows(data).firstOrNull;
+        setState(() {
+          if (row == null) {
+            _legRows.remove(raw);
+          } else {
+            _legRows[raw] = row;
+          }
+          _applyLegRows();
+        });
+      };
+    }
+    _legTopics.sync(wanted);
+    _legRows.removeWhere((trip, _) => !trips.contains(trip));
+    _applyLegRows();
   }
 
-  /// [nearby] from the fetched rows and the estimates: purple times moved to
-  /// the estimate; one stop lists every bus, nearby one row per line +
-  /// direction (from whichever stop has it soonest).
+  /// New ride data: inferred times into [routeReturns] (re-planning the
+  /// list), the selected journey's buses onto the map.
+  void _applyLegRows() {
+    routeReturns = {
+      for (final MapEntry(key: trip, value: r) in _legRows.entries)
+        if (r.inferred) trip: ReturnEstimate(r.departure.certainty!, delay: r.departure.time.difference(r.scheduled)),
+    };
+    final it = selected;
+    if (it == null) {
+      if (to != null) routes = _buildRoutes();
+      return;
+    }
+    final colors = _legColors(it);
+    tracker.show({
+      for (final l in it.transitLegs)
+        if (_legRows[l.tripId]?.bus case final bus?) l.tripId!: (vehicle: bus, color: colors[l.tripId] ?? _lineColor),
+    });
+    _drawApproach();
+  }
+
+  /// [nearby] from the fetched rows: one stop lists every bus, nearby one
+  /// row per line + direction (from whichever stop has it soonest).
   List<BoardRow> _buildNearby() {
-    final rows = applyReturnEstimates(_boardRows, boardReturns);
+    final rows = [..._transitousRows, for (final r in _tramiteRows.values) ...r];
     if (filterStop != null) return boardPerDeparture(rows);
     final best = <String, BoardRow>{};
     for (final r in rows) {
@@ -159,8 +181,6 @@ class _HomePageState extends State<HomePage> {
 
   /// Line view (a line's route, stops and live buses), when open.
   LineState? line;
-  VehicleSnapshot? _vehCache;
-  DateTime? _vehCacheAt;
   int _areaSeq = 0;
 
   // Routes.
@@ -198,26 +218,70 @@ class _HomePageState extends State<HomePage> {
   Timer? refreshTimer;
   Timer? clock;
 
+  /// Buses of the selected journey or the open line, on the map.
   late final LiveBusTracker tracker = LiveBusTracker(
-    feed: backend.vehicles,
     onFrame: (g) async {
       if (map != null && styleReady) await map!.setGeoJsonSource('buses', g);
     },
-    onSnapshot: () {
-      if (!mounted) return;
-      setState(() {});
-      _drawApproach();
+  );
+
+  /// Every bus around the map while browsing (no journey or line open).
+  late final AreaBuses areaBuses = AreaBuses(
+    connection: live,
+    tracker: LiveBusTracker(onFrame: (g) async {
+      if (map != null && styleReady) await map!.setGeoJsonSource('area-buses', g);
+    }),
+  );
+
+  /// The live stream is closed while the app is in the background.
+  late final AppLifecycleListener _lifecycle = AppLifecycleListener(
+    onHide: live.pause,
+    onShow: () {
+      live.resume();
+      _updateAreaBuses();
     },
   );
+
+  /// Leaving the browsing view (journeys or a line open): no more area
+  /// buses or stop boards followed.
+  void _leaveBrowsing() {
+    areaBuses.hide();
+    _boardTopics.clear();
+    _tramiteRows.clear();
+  }
+
+  /// Shows the buses around the visible map when browsing, hides them when
+  /// a route or a line is open (those show their own buses).
+  Future<void> _updateAreaBuses() async {
+    final m = map;
+    if (m == null || !styleReady) return;
+    if (to != null || line != null || selected != null) {
+      areaBuses.hide();
+      return;
+    }
+    try {
+      final view = await m.getVisibleRegion();
+      if (!mounted || to != null || line != null) return;
+      areaBuses.defaultColor = _lineColor;
+      areaBuses.show(view, m.cameraPosition?.zoom ?? 15);
+    } catch (_) {}
+  }
 
   @override
   void initState() {
     super.initState();
+    _lifecycle;
+    // What Tramite covers decides, per stop and ride, where live data comes
+    // from; until it answers, Transitous.
+    tramite.loadCoverage().then((_) {
+      if (mounted) _refreshArea(silent: true);
+    });
     _initLocation();
     // Nearby boards every 30 s while idle; routes every 60 s while listing.
     refreshTimer = Timer.periodic(const Duration(seconds: 30), (t) {
+      tramite.loadCoverage(); // no-op once known; retries while unreachable
       if (line != null) {
-        // the tracker refreshes the line's buses on its own
+        // the line's buses are pushed
       } else if (to == null) {
         _refreshArea(silent: true);
       } else if (selected == null && !planning && t.tick.isEven) {
@@ -232,7 +296,10 @@ class _HomePageState extends State<HomePage> {
     refreshTimer?.cancel();
     clock?.cancel();
     idleDebounce?.cancel();
-    tracker.stop();
+    _lifecycle.dispose();
+    _leaveBrowsing();
+    _legTopics.clear();
+    _lineTopics.clear();
     toSearch.dispose();
     fromSearch.dispose();
     favorites.dispose();
@@ -270,6 +337,7 @@ class _HomePageState extends State<HomePage> {
 
   /// Map stopped moving: after [kAreaIdleDelay] load what's in view.
   void _onCameraIdle() {
+    _updateAreaBuses();
     if (to != null || line != null) return; // the area list isn't shown
     idleDebounce?.cancel();
     idleDebounce = Timer(kAreaIdleDelay, _refreshArea);
@@ -278,6 +346,7 @@ class _HomePageState extends State<HomePage> {
   /// Loads stops in the visible map area (pins) and departures from the
   /// nearest of them, or from [filterStop] only when one is selected.
   Future<void> _refreshArea({bool silent = false}) async {
+    _updateAreaBuses();
     final m = map;
     if (m == null || !styleReady || to != null || line != null) return;
     final seq = ++_areaSeq;
@@ -288,10 +357,13 @@ class _HomePageState extends State<HomePage> {
       // Only the search bar is left: drop the sheet to its lowest height
       // (dragging is disabled while in this state, see build()).
       if (!zoomedOut) sheet.animateTo(M3EBottomSheetValue.preview);
+      _boardTopics.clear();
       setState(() {
         zoomedOut = true;
         nearbyStops = [];
         nearby = [];
+        _tramiteRows.clear();
+        _transitousRows = [];
         nearbyLoading = false;
       });
       _drawNearbyStops();
@@ -316,36 +388,57 @@ class _HomePageState extends State<HomePage> {
       if (seq != _areaSeq || !mounted) return;
       final pins = stops.take(kMaxStopPins).toList();
       final boardStops = filterStop != null ? [filterStop!] : pins.take(kMaxBoardStops).toList();
-      // The live feed tells which buses already went by (see
-      // dropPassedDepartures); without it, the boards as they are.
-      final running = _fetchVehicles();
-      final boards =
-          await Future.wait(boardStops.map((s) => backend.stops.board(s).catchError((_) => <BoardRow>[])));
-      final vehicles = await running;
+      // Stops Tramite covers are followed there (pushed, all colours); the
+      // rest are asked to Transitous on each refresh. A station mixes
+      // operators: its departures from stops Tramite covers come from
+      // Tramite too, listed under the station.
+      final followed = <String, Stop>{}; // Tramite stop id -> stop its rows show under
+      final asked = <Stop>[];
+      for (final s in boardStops) {
+        if (!s.station && tramite.covers(s.id)) {
+          followed[s.id] = s;
+        } else {
+          asked.add(s);
+        }
+      }
+      final boards = await Future.wait(asked.map((s) => backend.stops.board(s).catchError((_) => <BoardRow>[])));
       if (seq != _areaSeq || !mounted) return;
-      final rows = dropPassedDepartures(boards.expand((b) => b).toList(), vehicles?.keys.toSet() ?? const {});
+      final rows = <BoardRow>[];
+      for (final (i, s) in asked.indexed) {
+        for (final r in boards[i]) {
+          final next = <Departure>[];
+          for (final d in r.next) {
+            final id = d.stopId;
+            if (s.station && id != null && tramite.covers(id)) {
+              followed[id] = s;
+            } else {
+              next.add(d);
+            }
+          }
+          if (next.isNotEmpty) rows.add(BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: next));
+        }
+      }
       setState(() {
         nearbyStops = pins;
-        liveVehicles = vehicles;
         stopById
           ..clear()
           ..addEntries(pins.map((s) => MapEntry(s.id, s)));
-        _boardRows = rows;
-        // Keep the last estimates for trips still listed until the new ones
-        // arrive (no flicker back to grey on every refresh).
-        final listed = {for (final r in rows) for (final d in r.next) d.tripId};
-        boardReturns = {for (final e in boardReturns.entries) if (listed.contains(e.key)) e.key: e.value};
+        _transitousRows = rows;
+        _tramiteRows.removeWhere((id, _) => !followed.containsKey(id));
         nearby = _buildNearby();
         error = null;
       });
-      _drawNearbyStops();
-      // Then buses coming back from the other direction (a few requests).
-      final returns = await _estimateReturns([for (final r in rows) for (final d in r.next) (r.line, d)], vehicles);
-      if (seq != _areaSeq || !mounted) return;
-      setState(() {
-        boardReturns = returns;
-        nearby = _buildNearby();
+      _boardTopics.sync({
+        for (final MapEntry(key: id, value: stop) in followed.entries)
+          TramiteClient.departuresTopic(id): (data) {
+            if (!mounted) return;
+            setState(() {
+              _tramiteRows[id] = TramiteClient.parseBoard(data, stop);
+              nearby = _buildNearby();
+            });
+          },
       });
+      _drawNearbyStops();
     } catch (e) {
       if (mounted && !silent && seq == _areaSeq) setState(() => error = '$e');
     } finally {
@@ -388,6 +481,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _plan({bool silent = false}) async {
     final dest = to;
     if (dest == null) return;
+    _leaveBrowsing();
     setState(() {
       planning = true;
       error = null;
@@ -396,33 +490,14 @@ class _HomePageState extends State<HomePage> {
     try {
       // Several planner profiles merged and grouped by line sequence,
       // groups ordered by earliest arrival (see RouteSearch).
-      final vehicles = _fetchVehicles();
       final list = await routeSearch.search(from.position, dest.position);
-      final live = await vehicles;
       if (!mounted || to != dest) return;
       setState(() {
         _routeItineraries = [for (final g in list) ...g.options];
-        liveVehicles = live;
-        // Last estimates for trips still listed, until the new ones arrive
-        // (no flicker back to the timetable on every refresh).
-        final listed = {for (final it in _routeItineraries) for (final l in it.transitLegs) l.tripId};
-        routeReturns = {for (final e in routeReturns.entries) if (listed.contains(e.key)) e.key: e.value};
-        routes = _buildRoutes();
-      });
-      // Then buses coming back for timetable-only rides: red, or purple
-      // with the rides re-planned around our estimate.
-      final returns = await _estimateReturns([
-        for (final g in list)
-          for (final it in g.options)
-            for (final l in it.transitLegs)
-              (
-                l.routeShortName ?? l.mode,
-                Departure(time: l.start, realtime: l.realtime, tripId: l.tripId, origin: l.origin),
-              ),
-      ], live);
-      if (!mounted || to != dest) return;
-      setState(() {
-        routeReturns = returns;
+        // Then Tramite's view of the rides it covers, pushed as it changes:
+        // colours, and inferred times (re-planned around). Rides still
+        // listed keep what is known until then (no flicker).
+        _syncLegTopics();
         routes = _buildRoutes();
       });
     } catch (e) {
@@ -479,23 +554,12 @@ class _HomePageState extends State<HomePage> {
 
   String get _lineColor => _hex(Theme.of(context).colorScheme.primary);
 
-  /// All live vehicles, cached briefly (search typing, line directions).
-  Future<VehicleSnapshot> _liveVehicles() async {
-    final at = _vehCacheAt;
-    if (_vehCache != null && at != null && DateTime.now().difference(at) < const Duration(seconds: 20)) {
-      return _vehCache!;
-    }
-    final feed = backend.vehicles;
-    if (feed == null) throw StateError('no live GPS feed here');
-    final snap = await feed.vehicles();
-    _vehCache = snap;
-    _vehCacheAt = DateTime.now();
-    return snap;
-  }
-
-  /// Opens the line view for [name]. [tripId] (a tapped departure) picks the
-  /// direction to show; otherwise the first direction with a live bus.
-  Future<void> _openLine({required String name, required String mode, String? tripId, VehicleSnapshot? snapshot}) async {
+  /// Opens the line view for [name]. [tripId] (a tapped departure, in
+  /// Transitous form) picks the direction to show; otherwise the first
+  /// direction with a live bus. [lineId] is the line in Tramite (e.g.
+  /// "it-Lazio-Rome_85"), known from line search; else derived from [tripId].
+  /// Without Tramite for the line: its route only, no live buses.
+  Future<void> _openLine({required String name, required String mode, String? tripId, String? lineId}) async {
     final trips = backend.trips;
     if (trips == null) return;
     HapticFeedback.selectionClick();
@@ -505,28 +569,38 @@ class _HomePageState extends State<HomePage> {
     setState(() => line = state);
     if (sheetValue == M3EBottomSheetValue.preview) sheet.animateTo(M3EBottomSheetValue.collapsed);
     _drawNearbyStops();
-    if (backend.vehicles != null) tracker.trackLine(name, _lineColor);
+    _leaveBrowsing();
+    if (tripId != null) _loadLineTrip(tripId);
 
-    // One trip id per direction, from the line's live buses.
-    if (backend.vehicles != null) {
-      try {
-        final snap = snapshot ?? await _liveVehicles();
-        for (final v in snap.vehicles) {
-          if (v.routeShortName?.toLowerCase() != name.toLowerCase()) continue;
-          final id = trips.tripIdForVehicle(v);
-          if (id != null) state.directions.putIfAbsent(v.directionId ?? 0, () => id);
-        }
-      } catch (_) {}
-    }
-    if (line != state) return;
-    final first = tripId ?? state.directions.values.firstOrNull;
-    if (first == null) {
-      setState(() => state.error = backend.vehicles == null
-          ? 'Live buses aren\'t available in this area.'
-          : 'No bus of line $name is running right now.');
+    final prefix = lineId == null ? tramite.prefixOf(tripId) : null;
+    final id = lineId ?? (prefix == null ? null : TramiteClient.lineId(prefix, name));
+    if (id == null) {
+      if (tripId == null) setState(() => state.error = 'Live buses aren\'t available for this line.');
       return;
     }
-    await _loadLineTrip(first);
+    // The line's buses, pushed: drawn, and one trip per direction for the
+    // direction switch (the first one shown if no departure picked one).
+    _lineTopics.sync({
+      TramiteClient.lineTopic(id): (data) {
+        if (!mounted || line != state) return;
+        final buses = TramiteClient.parseVehicles(data);
+        tracker.show({for (final b in buses) b.vehicle.tripId ?? b.vehicle.id: (vehicle: b.vehicle, color: _lineColor)});
+        for (final b in buses) {
+          if (b.vehicle.backendTripId case final t?) state.directions.putIfAbsent(b.vehicle.directionId ?? 0, () => t);
+        }
+        if (state.tripId == null) {
+          final first = state.directions.values.firstOrNull;
+          if (first != null) {
+            _loadLineTrip(first);
+          } else {
+            setState(() => state.error = 'No bus of line $name is running right now.');
+          }
+        } else {
+          setState(() {});
+        }
+        _drawApproach();
+      },
+    });
   }
 
   Future<void> _loadLineTrip(String id) async {
@@ -560,7 +634,8 @@ class _HomePageState extends State<HomePage> {
   void _closeLine() {
     if (line == null) return;
     setState(() => line = null);
-    tracker.stop();
+    _lineTopics.clear();
+    tracker.clear();
     _drawLine();
     _drawNearbyStops();
     _refreshArea();
@@ -624,10 +699,7 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       city = next;
       backend = createBackend(city: next);
-      _vehCache = null;
     });
-    tracker.feed = backend.vehicles;
-    if (backend.vehicles == null) tracker.stop();
   }
 
   Future<void> _onStyleLoaded() async {
@@ -637,7 +709,7 @@ class _HomePageState extends State<HomePage> {
     final labelColor = _hex(Theme.of(context).colorScheme.onSurface);
     final haloColor = _hex(Theme.of(context).colorScheme.surface);
     await m.addGeoJsonSource('nearby', empty, promoteId: 'id');
-    for (final id in ['line', 'line-stops', 'approach', 'route', 'stops', 'endpoints', 'buses']) {
+    for (final id in ['line', 'line-stops', 'approach', 'route', 'stops', 'endpoints', 'area-buses', 'buses']) {
       await m.addGeoJsonSource(id, empty);
     }
     // Stop pins: tappable (filters departures to that stop); the selected one
@@ -714,6 +786,23 @@ class _HomePageState extends State<HomePage> {
         const CircleLayerProperties(
             circleRadius: 9, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 3),
         enableInteraction: false);
+    // Browsing: every bus around, smaller than a route's or line's own.
+    await m.addCircleLayer('area-buses', 'area-buses-circle',
+        const CircleLayerProperties(
+            circleRadius: 11, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 2),
+        minzoom: AreaBuses.minZoom,
+        enableInteraction: false);
+    await m.addSymbolLayer('area-buses', 'area-buses-label',
+        const SymbolLayerProperties(
+          textField: ['get', 'line'],
+          textFont: ['Noto Sans Bold'],
+          textSize: 9,
+          textColor: '#FFFFFF',
+          textAllowOverlap: true,
+          textIgnorePlacement: true,
+        ),
+        minzoom: AreaBuses.minZoom,
+        enableInteraction: false);
     await m.addCircleLayer('buses', 'buses-circle',
         const CircleLayerProperties(
             circleRadius: 15, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 3),
@@ -769,12 +858,6 @@ class _HomePageState extends State<HomePage> {
           if (to != null) _point(to!.position, {'color': '#E53935'}),
         ]));
   }
-
-  /// Run key -> trip id of each ride (see LiveBusTracker.track).
-  Map<String, String> _legRuns(Itinerary it) => {
-        for (final l in it.transitLegs)
-          if (l.runKey != null && l.tripId != null) l.runKey!: l.tripId!,
-      };
 
   Map<String, String> _legColors(Itinerary it) {
     final colors = <String, String>{};
@@ -923,8 +1006,10 @@ class _HomePageState extends State<HomePage> {
     setState(() {
       to = null;
       routes = [];
+      _routeItineraries = [];
       error = null;
     });
+    _syncLegTopics(); // nothing left to follow
     toSearch.clear();
     _drawNearbyStops();
     _drawEndpoints();
@@ -944,7 +1029,7 @@ class _HomePageState extends State<HomePage> {
       variants = v;
       selected = v.current;
     });
-    tracker.track(_legColors(v.current), runs: _legRuns(v.current));
+    _syncLegTopics();
     _loadTripPaths(v.current);
     _drawSelected();
     _fetchTripWalks(v, all: true);
@@ -966,7 +1051,7 @@ class _HomePageState extends State<HomePage> {
     // The real walk turned out too long to make a connection: back to rides.
     if (!v.feasible) v.restore(v.defaults);
     setState(() => selected = v.current);
-    tracker.track(_legColors(v.current), runs: _legRuns(v.current));
+    _syncLegTopics();
     _drawSelected(fit: false);
   }
 
@@ -976,7 +1061,7 @@ class _HomePageState extends State<HomePage> {
     if (v == null) return;
     final kept = v.choose(slot, variant);
     setState(() => selected = v.current);
-    tracker.track(_legColors(v.current), runs: _legRuns(v.current));
+    _syncLegTopics();
     _loadTripPaths(v.current);
     _drawSelected(fit: false);
     // A new walk (e.g. two walked legs merged) may need its street route.
@@ -994,7 +1079,8 @@ class _HomePageState extends State<HomePage> {
       selected = null;
       variants = null;
     });
-    tracker.stop();
+    tracker.clear();
+    _syncLegTopics(); // back to following the whole list
     tripPaths.clear();
     _drawApproach();
     _drawSelected();
@@ -1113,31 +1199,30 @@ class _HomePageState extends State<HomePage> {
     }
     await Future<void>.delayed(const Duration(milliseconds: 250));
     if (c.text.trim() != q) return items; // a newer query is on its way
-    // Lines with buses running right now ("492", "n6"...): open the line view.
-    if (!isFrom && q.length <= 6 && !q.contains(' ') && backend.trips != null && backend.vehicles != null) {
-      try {
-        final snap = await _liveVehicles();
-        final counts = <String, int>{};
-        for (final v in snap.vehicles) {
-          final l = v.routeShortName;
-          if (l != null && l.toLowerCase().startsWith(q.toLowerCase())) counts[l] = (counts[l] ?? 0) + 1;
-        }
-        final lines = counts.keys.toList()
-          ..sort((a, b) {
-            final exact = (b.toLowerCase() == q.toLowerCase() ? 1 : 0) - (a.toLowerCase() == q.toLowerCase() ? 1 : 0);
-            return exact != 0 ? exact : a.length != b.length ? a.length - b.length : a.compareTo(b);
-          });
-        items.addAll(lines.take(4).map((l) => ListTile(
-              leading: LinePill(line: l, mode: 'BUS', color: cs.primary),
-              title: Text('Line $l'),
-              subtitle: Text(counts[l] == 1 ? '1 bus live' : '${counts[l]} buses live'),
-              onTap: () {
-                c.closeView('');
-                _openLine(name: l, mode: 'BUS', snapshot: snap);
-              },
-            )));
-      } catch (_) {
-        // no live data: just the place search below
+    // A line with buses running right now ("492", "n6"): open the line
+    // view. Asked to Tramite, exact number, for each source it covers.
+    if (!isFrom && q.length <= 6 && !q.contains(' ') && backend.trips != null && tramite.prefixes.isNotEmpty) {
+      final found = await Future.wait([
+        for (final p in tramite.prefixes)
+          tramite
+              .lineVehicles(TramiteClient.lineId(p, q))
+              .then((buses) => (id: TramiteClient.lineId(p, q), buses: buses))
+              .catchError((Object _) => (id: '', buses: <({Vehicle vehicle, String? color})>[])),
+      ]);
+      if (c.text.trim() != q) return items;
+      for (final (:id, :buses) in found) {
+        if (buses.isEmpty) continue;
+        final name = buses.first.vehicle.routeShortName ?? q;
+        final color = buses.first.color;
+        items.add(ListTile(
+          leading: LinePill(line: name, mode: 'BUS', color: color == null ? cs.primary : hexColor(color)),
+          title: Text('Line $name'),
+          subtitle: Text(buses.length == 1 ? '1 bus live' : '${buses.length} buses live'),
+          onTap: () {
+            c.closeView('');
+            _openLine(name: name, mode: 'BUS', lineId: id);
+          },
+        ));
       }
     }
     if (q.length < 2) return items;
@@ -1280,19 +1365,16 @@ class _HomePageState extends State<HomePage> {
 
   /// A route goes under Live when its first ride is backed by a real bus.
   bool _routeLive(RouteGroup g) =>
-      g.isLive || g.best.transitLegs.take(1).any((l) => _certainty(l.realtime, l.tripId, l.runKey) != Certainty.scheduled);
+      g.isLive || g.best.transitLegs.take(1).any((l) => _certainty(l.realtime, l.tripId) != Certainty.scheduled);
 
-  /// Like [_certainty], from the buses the tracker follows (trip and line
-  /// views, polled live): a followed trip with no bus yet is waiting.
-  Certainty _trackedCertainty(bool realtime, String? tripId, [String? runKey]) => certaintyOf(
-        realtime: realtime,
-        tripId: tripId,
-        runKey: runKey,
-        vehicles: backend.vehicles == null || tracker.lastError != null
-            ? null
-            : indexVehicles(tracker.buses.values.map((b) => b.vehicle)),
-        returns: routeReturns,
-      );
+  /// Like [_certainty], also from the buses on the map (the line view's,
+  /// whose trips aren't rides of a journey): live with its bus seen is on
+  /// its way, or waiting while the bus hasn't started.
+  Certainty _trackedCertainty(bool realtime, String? tripId) {
+    final bus = tripId == null ? null : tracker.buses[tripId]?.vehicle;
+    if (realtime && bus != null && _legRows[tripId] == null) return bus.started ? Certainty.moving : Certainty.waiting;
+    return _certainty(realtime, tripId);
+  }
 
   /// Zoomed out on the stops view: the sheet holds just the search bar.
   bool get _onlySearchBar => selected == null && to == null && line == null && zoomedOut;
@@ -1303,7 +1385,7 @@ class _HomePageState extends State<HomePage> {
         context,
         l,
         color: Theme.of(context).colorScheme.primary,
-        liveBuses: backend.vehicles == null ? null : tracker.buses.length,
+        liveBuses: _lineTopics.topics.isEmpty ? null : tracker.buses.length,
         certainty: _trackedCertainty(l.trip?.realtime ?? false, MotisClient.rawTripId(l.tripId)),
         onBack: _closeLine,
         onSwitchDirection: _otherDirection() == null ? null : () => _loadLineTrip(_otherDirection()!),
@@ -1470,13 +1552,23 @@ class _HomePageState extends State<HomePage> {
               itemBuilder: (_, i) => RouteGroupRow(
                 group: list[i],
                 colorFor: _colorFor,
-                certaintyFor: (l) => _certainty(l.realtime, l.tripId, l.runKey),
+                certaintyFor: (l) => _certainty(l.realtime, l.tripId),
               ),
               onTap: (i) => _select(list[i].best),
             ),
           ],
       ],
     ];
+  }
+
+  /// The line under a selected journey's header: how many of its rides
+  /// have their bus on the map.
+  String _tripStatus(Itinerary it, int? feedAge) {
+    if (it.transitLegs.isEmpty) return 'Walking only';
+    final covered = it.transitLegs.where((l) => tramite.covers(l.backendTripId)).length;
+    if (covered == 0) return 'No live bus positions for this trip';
+    if (!live.connected.value) return 'Live positions unavailable';
+    return 'Tracking ${tracker.buses.length} of $covered vehicles${feedAge != null ? ' · positions ${feedAge}s old' : ''}';
   }
 
   List<Widget> _tripSlivers(Itinerary it) {
@@ -1524,14 +1616,7 @@ class _HomePageState extends State<HomePage> {
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
           child: Text(
-            backend.vehicles == null
-                ? 'No live bus positions in this area'
-                : tracker.lastError != null
-                ? 'Live positions unavailable'
-                : it.transitLegs.isEmpty
-                    ? 'Walking only'
-                    : 'Tracking ${tracker.buses.length} of ${it.transitLegs.length} vehicles'
-                        '${feedAge != null ? ' · feed ${feedAge}s old' : ''}',
+            _tripStatus(it, feedAge),
             style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant),
           ),
         ),
@@ -1550,7 +1635,7 @@ class _HomePageState extends State<HomePage> {
             color: _colorFor(it, l),
             bus: tracker.buses[l.tripId],
             waitMinutes: wait,
-            certainty: _trackedCertainty(l.realtime, l.tripId, l.runKey),
+            certainty: _trackedCertainty(l.realtime, l.tripId),
           );
           final v = variants;
           final slot = v?.slotOfLeg(i);

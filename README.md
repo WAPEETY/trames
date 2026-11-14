@@ -2,7 +2,7 @@
 
 **Trames** is a public transport app, mainly focussed on Rome. It answers one question: when will a bus actually reach you?
 
-It follows Roma Mobilità's live GPS feed for buses and trams. Built on open data and OpenStreetMap maps.
+Routes and timetables come from [Transitous](https://transitous.org); live buses, fresh departures and estimates for buses not yet on their trip come from [Tramite](https://git.marcorealacci.me/marcorealacci/tramite), our service built on Roma Mobilità's open data. Maps from OpenStreetMap.
 
 ## Why Trames?
 
