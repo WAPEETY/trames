@@ -126,7 +126,7 @@ void main() {
     await t.tap(find.text('Not at all'));
     await t.pumpAndSettle();
     expect(appSettings.walkLiking, WalkLiking.notAtAll);
-    expect(find.textContaining('at most 5 min'), findsOneWidget);
+    expect(find.textContaining('more than 5 minutes'), findsOneWidget);
     expect(find.textContaining('Current speed: 5.0 km/h'), findsOneWidget);
     await t.tap(find.text('Slow'));
     await t.pumpAndSettle();

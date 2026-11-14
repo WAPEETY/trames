@@ -110,9 +110,10 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const SizedBox(height: 10),
             Text(
-              switch (walk.maxRideWalk) {
-                final cap? => l.walkLimitDescription(cap.inMinutes),
-                null => l.walkALotDescription,
+              switch (walk) {
+                WalkLiking.notAtAll => l.walkNotAtAllDescription,
+                WalkLiking.aBit => l.walkABitDescription,
+                WalkLiking.aLot => l.walkALotDescription,
               },
               style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
             ),
@@ -209,7 +210,11 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        l.preferDescription(p.changeFloor.inMinutes, (p.changeShare * 100).round()),
+                        switch (p) {
+                          RoutePreference.fastest => l.preferFastestDescription,
+                          RoutePreference.balanced => l.preferBalancedDescription,
+                          RoutePreference.fewerChanges => l.preferFewerChangesDescription,
+                        },
                         style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
                       ),
                     ]),
