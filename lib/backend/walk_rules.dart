@@ -1,6 +1,7 @@
 /// Walking pace used for every walking time (planner requests and the
-/// placeholder shown while a walking route loads). Change it here.
-const kWalkingSpeedKmh = 6.0;
+/// placeholder shown while a walking route loads), km/h. Set from the
+/// settings with useWalkingSpeed (config.dart).
+double walkingSpeedKmh = 5.0;
 
 /// When walking should replace a ride, or the whole trip.
 class WalkPolicy {

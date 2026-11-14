@@ -84,6 +84,9 @@ class WalkCache {
   WalkRoute? lookup(LatLng from, LatLng to) => _known[walkKey(from, to)];
   bool has(LatLng from, LatLng to) => _known.containsKey(walkKey(from, to));
 
+  /// Forgets every walk (e.g. fetched at another walking pace).
+  void clear() => _known.clear();
+
   /// Fetches up to [max] of [pairs] not known yet, in parallel.
   Future<void> fetch(Iterable<(LatLng, LatLng)> pairs, {int max = 6}) async {
     final todo = <String, (LatLng, LatLng)>{};

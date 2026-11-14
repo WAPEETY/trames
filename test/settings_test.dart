@@ -1,5 +1,6 @@
 import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWidgetsLocalizations;
 import 'package:flutter_test/flutter_test.dart';
+import 'package:maplibre_gl/maplibre_gl.dart' show LatLng;
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 import 'package:roma_transit/l10n/app_localizations.dart';
@@ -60,13 +61,44 @@ void main() {
     await s.load();
     expect(s.walkLiking, WalkLiking.aBit);
     expect(s.routePreference, RoutePreference.balanced);
+    expect(s.walkSpeed, WalkSpeed.auto);
+    expect(s.walkingSpeedKmh, 5.0);
     s.walkLiking = WalkLiking.aLot;
+    s.walkSpeed = WalkSpeed.fast;
     s.routePreference = RoutePreference.fewerChanges;
     await Future<void>.delayed(Duration.zero);
     final again = AppSettings();
     await again.load();
     expect(again.walkLiking, WalkLiking.aLot);
     expect(again.routePreference, RoutePreference.fewerChanges);
+    expect(again.walkSpeed, WalkSpeed.fast);
+    expect(again.walkingSpeedKmh, 6.0);
+  });
+
+  test('the learned pace survives a restart and is used in Auto', () async {
+    final s = AppSettings();
+    await s.load();
+    var heard = 0, settingsHeard = 0;
+    s.calibration.addListener(() => heard++);
+    s.addListener(() => settingsHeard++);
+    final t0 = DateTime(2026, 11, 14, 17);
+    // 3 min north at 4 km/h, then a stop.
+    for (var sec = 0; sec <= 180; sec += 5) {
+      s.observeWalking(WalkFix(
+          position: LatLng(41.9 + sec * 4 / 3.6 / 111195, 12.5), time: t0.add(Duration(seconds: sec)), accuracy: 5));
+    }
+    s.observeWalking(WalkFix(position: const LatLng(42, 12.5), time: t0.add(const Duration(minutes: 10)), accuracy: 5));
+    expect(heard, 1);
+    expect(settingsHeard, 0); // journeys on screen aren't re-planned
+    final learned = s.walkingSpeedKmh;
+    expect(learned, lessThan(5.0));
+    await Future<void>.delayed(Duration.zero);
+    final again = AppSettings();
+    await again.load();
+    expect(again.walkingSpeedKmh, learned);
+    expect(again.calibrator.minutes, closeTo(3, 0.2));
+    again.resetCalibration();
+    expect(again.walkingSpeedKmh, 5.0);
   });
 
   testWidgets('the page changes the settings', (t) async {
@@ -95,9 +127,18 @@ void main() {
     await t.pumpAndSettle();
     expect(appSettings.walkLiking, WalkLiking.notAtAll);
     expect(find.textContaining('at most 5 min'), findsOneWidget);
+    expect(find.textContaining('Current speed: 5.0 km/h'), findsOneWidget);
+    await t.tap(find.text('Slow'));
+    await t.pumpAndSettle();
+    expect(appSettings.walkSpeed, WalkSpeed.slow);
+    expect(find.textContaining('assume 4.0 km/h'), findsOneWidget);
+    await t.ensureVisible(find.text('Fewer changes'));
+    await t.pumpAndSettle();
     await t.tap(find.text('Fewer changes'));
     await t.pumpAndSettle();
     expect(appSettings.routePreference, RoutePreference.fewerChanges);
+    await t.ensureVisible(find.text('Advanced'));
+    await t.pumpAndSettle();
     await t.tap(find.text('Advanced'));
     await t.pumpAndSettle();
     expect(find.textContaining('enriches MOTIS'), findsOneWidget);

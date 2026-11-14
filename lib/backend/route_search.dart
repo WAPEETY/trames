@@ -172,7 +172,7 @@ class RouteSearch {
         walks: cache,
         policy: stayOn,
         maxWalk: policy.maxStayOnWalk,
-        walkSpeed: kWalkingSpeedKmh / 3.6,
+        walkSpeed: walkingSpeedKmh / 3.6,
       );
     }
     return group(all);

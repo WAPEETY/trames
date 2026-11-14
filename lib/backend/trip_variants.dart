@@ -187,7 +187,7 @@ class TripVariants {
 
   static (Duration, double) _estimate(LatLng from, LatLng to) {
     final meters = distanceMeters(from, to) * 1.3; // streets aren't straight
-    return (Duration(seconds: (meters / (kWalkingSpeedKmh / 3.6)).round()), meters);
+    return (Duration(seconds: (meters / (walkingSpeedKmh / 3.6)).round()), meters);
   }
 
   Leg _walk(LatLng from, LatLng to, String fromName, String toName, DateTime start) {

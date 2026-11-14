@@ -16,7 +16,7 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
     this.language = 'it',
     this.searchRadiusMeters = 500,
     this.homeFeedId,
-    this.walkingSpeedKmh,
+    this._walkingSpeedKmh,
     http.Client? client,
   }) : _client = client ?? http.Client();
 
@@ -47,8 +47,15 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
   /// stop number there; null outside a configured city.
   String? homeFeedId;
 
-  /// Walking pace sent to MOTIS (null = its default, ~4.3 km/h).
-  final double? walkingSpeedKmh;
+  /// Walking pace sent to MOTIS (null = its default, ~4.3 km/h). Changing
+  /// it drops the walks fetched at the old pace.
+  double? get walkingSpeedKmh => _walkingSpeedKmh;
+  double? _walkingSpeedKmh;
+  set walkingSpeedKmh(double? kmh) {
+    if (kmh == _walkingSpeedKmh) return;
+    _walkingSpeedKmh = kmh;
+    _walks.clear();
+  }
 
   /// `pedestrianSpeed` in m/s, for every request that routes on foot.
   Map<String, String> get _pace =>

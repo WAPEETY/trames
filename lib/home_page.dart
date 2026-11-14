@@ -439,6 +439,16 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           if (from.isMyLocation) from = _myLocation(here!);
         });
         _checkBoarding();
+        appSettings.observeWalking(
+          WalkFix(
+            position: LatLng(pos.latitude, pos.longitude),
+            time: pos.timestamp,
+            accuracy: pos.accuracy,
+            // Android/iOS report 0 (or less) when they don't know the speed.
+            speed: pos.speed > 0 ? pos.speed : null,
+          ),
+          riding: from.onBoard != null,
+        );
       },
       onError: (Object _) {},
     );
@@ -658,6 +668,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Future<void> _plan({bool silent = false}) async {
     final dest = to;
     if (dest == null) return;
+    // The walking pace (setting or newly learned) applies from this search.
+    if (useWalkingSpeed(appSettings.walkingSpeedKmh)) walkCache?.clear();
     _leaveBrowsing();
     setState(() {
       planning = true;

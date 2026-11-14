@@ -11,7 +11,7 @@ import 'walk_rules.dart';
 ///  * own MOTIS server  -> `MotisClient(baseUrl: 'https://motis.example.org')`
 ///  * own OTP server    -> write `OtpClient implements TripPlanner, StopBoards`
 ///  * own geocoder      -> any `PlaceSearch` (e.g. a Photon/Pelias client)
-final MotisClient _motis = MotisClient(baseUrl: kMotisUrl, walkingSpeedKmh: kWalkingSpeedKmh);
+final MotisClient _motis = MotisClient(baseUrl: kMotisUrl, walkingSpeedKmh: walkingSpeedKmh);
 
 /// Transitous, the public MOTIS server the app uses unless set otherwise.
 const kMotisUrl = 'https://api.transitous.org';
@@ -24,6 +24,15 @@ void useServers({required String motis, required String tramiteUrl}) {
     tramite.switchTo(tramiteUrl);
     live.reconnect();
   }
+}
+
+/// Walks at [kmh] from now on (settings). Returns whether it changed: walks
+/// fetched at the old pace are then stale.
+bool useWalkingSpeed(double kmh) {
+  if (kmh == walkingSpeedKmh) return false;
+  walkingSpeedKmh = kmh;
+  _motis.walkingSpeedKmh = kmh;
+  return true;
 }
 
 /// Checks a server before switching to it.

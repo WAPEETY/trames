@@ -80,6 +80,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
     final walk = appSettings.walkLiking;
+    final speed = appSettings.walkSpeed;
     final prefer = appSettings.routePreference;
     return Scaffold(
       body: CustomScrollView(slivers: [
@@ -114,6 +115,62 @@ class _SettingsPageState extends State<SettingsPage> {
                 null => l.walkALotDescription,
               },
               style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+          ]),
+        ),
+
+        // Walking speed: auto (learned) or a fixed pace.
+        SliverToBoxAdapter(child: const SizedBox(height: 12)),
+        SliverToBoxAdapter(
+          child: _Card(children: [
+            Text(l.settingsSpeedTitle, style: emphasized(context).titleMedium.copyWith(color: cs.onSurface)),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: M3ESegmentedButton<WalkSpeed>(
+                segments: [
+                  M3ESegment(value: WalkSpeed.auto, label: l.speedAuto),
+                  M3ESegment(value: WalkSpeed.slow, label: l.speedSlow),
+                  M3ESegment(value: WalkSpeed.normal, label: l.speedNormal),
+                  M3ESegment(value: WalkSpeed.fast, label: l.speedFast),
+                ],
+                selected: {speed},
+                showSelectedIcon: false,
+                onSelectionChanged: (s) {
+                  HapticFeedback.selectionClick();
+                  appSettings.walkSpeed = s.first;
+                },
+              ),
+            ),
+            const SizedBox(height: 10),
+            ListenableBuilder(
+              listenable: appSettings.calibration,
+              builder: (context, _) {
+                final c = appSettings.calibrator;
+                final learned = c.minutes >= 1;
+                return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(
+                    switch (speed.kmh) {
+                      final kmh? => l.speedFixedDescription(kmh),
+                      null when learned => l.speedLearnedDescription(c.kmh, c.minutes.round()),
+                      null => l.speedLearningDescription(c.kmh),
+                    },
+                    style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  ),
+                  if (speed == WalkSpeed.auto && learned)
+                    Align(
+                      alignment: Alignment.centerRight,
+                      child: TextButton.icon(
+                        icon: const Icon(Icons.restart_alt_rounded),
+                        label: Text(l.speedRecalibrate),
+                        onPressed: () {
+                          HapticFeedback.selectionClick();
+                          appSettings.resetCalibration();
+                        },
+                      ),
+                    ),
+                ]);
+              },
             ),
           ]),
         ),

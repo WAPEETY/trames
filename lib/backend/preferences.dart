@@ -51,6 +51,20 @@ enum WalkLiking {
       );
 }
 
+/// How fast you walk (settings): a fixed pace, or [auto] learned from GPS
+/// while you walk with the app open (see WalkCalibrator).
+enum WalkSpeed {
+  auto(null),
+  slow(4.0),
+  normal(5.0),
+  fast(6.0);
+
+  const WalkSpeed(this.kmh);
+
+  /// The fixed pace, km/h; null for [auto].
+  final double? kmh;
+}
+
 /// What to prefer between speed and fewer changes (settings). A route with
 /// one change fewer is worth arriving max([changeFloor], [changeShare] ×
 /// trip) later; the same bar decides when getting off the bus you're on to
