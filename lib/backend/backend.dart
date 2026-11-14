@@ -139,6 +139,30 @@ double distanceMeters(LatLng a, LatLng b) {
   return 2 * r * math.asin(math.sqrt(h));
 }
 
+/// Where a bus is along its trip's [stops], from the stop the feed says it
+/// is at or heading to: at stop [index] ([atStop]), or on the way from the
+/// stop before to [index]. Null when the feed doesn't say or the stop isn't
+/// on this trip.
+///
+/// The feed doesn't tell "at" from "heading to", so within [atStopMeters] of
+/// the stop counts as at it. Before its first stop a bus is shown at it.
+({int index, bool atStop})? busPlaceOnTrip(List<TripStop> stops, Vehicle bus, {double atStopMeters = 40}) {
+  int? index;
+  final seqIndex = bus.stopSequence == null ? null : bus.stopSequence! - 1;
+  if (bus.stopId case final id?) {
+    // A stop can be on a trip twice (loop lines): the one nearest the
+    // sequence number, else the first.
+    for (var i = 0; i < stops.length; i++) {
+      if (stops[i].stopId != id) continue;
+      if (index == null || (seqIndex != null && (i - seqIndex).abs() < (index - seqIndex).abs())) index = i;
+    }
+  }
+  index ??= seqIndex != null && seqIndex >= 0 && seqIndex < stops.length ? seqIndex : null;
+  if (index == null) return null;
+  final atStop = index == 0 || distanceMeters(bus.position, stops[index].position) <= atStopMeters;
+  return (index: index, atStop: atStop);
+}
+
 /// Groups departures at one stop into one row per line + direction.
 List<BoardRow> groupDepartures(
   Stop stop,

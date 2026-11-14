@@ -1457,6 +1457,7 @@ class _HomePageState extends State<HomePage> {
         onBack: _closeLine,
         onSwitchDirection: _otherDirection() == null ? null : () => _loadLineTrip(_otherDirection()!),
         onStopTap: (stop) => map?.animateCamera(CameraUpdate.newLatLngZoom(stop.position, 16.5)),
+        bus: tracker.buses[MotisClient.rawTripId(l.tripId)]?.vehicle,
       );
     }
     if (selected != null) return _tripSlivers(selected!);

@@ -38,10 +38,13 @@ List<Widget> lineSlivers(
   required VoidCallback onBack,
   required VoidCallback? onSwitchDirection,
   required ValueChanged<TripStop> onStopTap,
+  /// The bus running the shown trip, when it's live: drawn in the stop list.
+  Vehicle? bus,
 }) {
   final cs = Theme.of(context).colorScheme;
   final tt = Theme.of(context).textTheme;
   final trip = s.trip;
+  final place = trip == null || bus == null ? null : busPlaceOnTrip(trip.stops, bus);
   return [
     SliverToBoxAdapter(
       child: Padding(
@@ -104,30 +107,112 @@ List<Widget> lineSlivers(
     else if (trip == null)
       SliverToBoxAdapter(child: SheetLoading(label: context.l10n.loadingLine))
     else
-      M3EList.sliver(
-        margin: const EdgeInsets.symmetric(horizontal: 16),
-        itemCount: trip.stops.length,
-        itemBuilder: (_, i) => _StopRow(
-          stop: trip.stops[i],
-          color: color,
-          certainty: certainty,
-          first: i == 0,
-          last: i == trip.stops.length - 1,
-        ),
-        onTap: (i) => onStopTap(trip.stops[i]),
+      SliverToBoxAdapter(
+        child: _StopList(trip: trip, color: color, certainty: certainty, place: place, onStopTap: onStopTap),
       ),
   ];
 }
 
+/// The trip's stops as a card list, with the bus on it: in place of the
+/// dot when it's at a stop, else over the gap between the two cards it
+/// runs between. The cards clip their content, so that one is drawn on a
+/// layer above the list, where the measured line of the stop it left ends.
+class _StopList extends StatefulWidget {
+  const _StopList(
+      {required this.trip, required this.color, required this.certainty, required this.place, required this.onStopTap});
+  final TripInfo trip;
+  final Color color;
+  final Certainty certainty;
+  final ({int index, bool atStop})? place;
+  final ValueChanged<TripStop> onStopTap;
+
+  @override
+  State<_StopList> createState() => _StopListState();
+}
+
+class _StopListState extends State<_StopList> {
+  static const _gap = M3EListCardListTheme.defaultGap;
+  final _stack = GlobalKey();
+  final _lineAbove = GlobalKey(); // the timeline of the stop the bus left
+
+  /// Centre of the gap the bus is over, in the stack; null: none drawn.
+  Offset? _bus;
+
+  int? get _leftIndex => switch (widget.place) {
+        (index: final i, atStop: false) when i > 0 => i - 1,
+        _ => null,
+      };
+
+  void _measure() {
+    if (!mounted) return;
+    Offset? at;
+    final line = _lineAbove.currentContext?.findRenderObject() as RenderBox?;
+    final stack = _stack.currentContext?.findRenderObject() as RenderBox?;
+    if (_leftIndex != null && line != null && stack != null && line.attached && stack.attached) {
+      at = stack.globalToLocal(line.localToGlobal(line.size.bottomCenter(Offset.zero))) + const Offset(0, _gap / 2);
+    }
+    if (at != _bus && (at == null || _bus == null || (at - _bus!).distance > 0.5)) setState(() => _bus = at);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stops = widget.trip.stops;
+    final place = widget.place;
+    final left = _leftIndex;
+    final bus = _bus;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measure());
+    return Stack(key: _stack, clipBehavior: Clip.none, children: [
+      M3EList(
+        margin: const EdgeInsets.symmetric(horizontal: 16),
+        gap: _gap,
+        itemCount: stops.length,
+        itemBuilder: (_, i) => _StopRow(
+          stop: stops[i],
+          color: widget.color,
+          certainty: widget.certainty,
+          first: i == 0,
+          last: i == stops.length - 1,
+          busHere: place != null && place.atStop && place.index == i,
+          lineKey: i == left ? _lineAbove : null,
+        ),
+        onTap: (i) => widget.onStopTap(stops[i]),
+      ),
+      if (left != null && bus != null)
+        Positioned(
+          left: bus.dx - _BusBadge.size / 2,
+          top: bus.dy - _BusBadge.size / 2,
+          child: IgnorePointer(child: _BusBadge(color: _busColor(context, widget.certainty))),
+        ),
+    ]);
+  }
+}
+
+/// The bus badge's color: like its live times, live green on timetable.
+Color _busColor(BuildContext context, Certainty c) =>
+    certaintyColor(context, c == Certainty.scheduled ? Certainty.moving : c);
+
 /// One stop of the trip: time (colored by how sure it is), a line with a
-/// dot, the name. Stops the bus already left are dimmed.
+/// dot, the name. Stops the bus already left are dimmed. The bus replaces
+/// the dot when it's at the stop.
+/// [lineKey] marks the timeline, to place a bus between stops (see
+/// [_StopList]).
 class _StopRow extends StatelessWidget {
-  const _StopRow({required this.stop, required this.color, required this.certainty, required this.first, required this.last});
+  const _StopRow({
+    required this.stop,
+    required this.color,
+    required this.certainty,
+    required this.first,
+    required this.last,
+    this.busHere = false,
+    this.lineKey,
+  });
   final TripStop stop;
   final Color color;
   final Certainty certainty;
   final bool first;
   final bool last;
+  final bool busHere;
+  final Key? lineKey;
 
   @override
   Widget build(BuildContext context) {
@@ -135,8 +220,17 @@ class _StopRow extends StatelessWidget {
     final passed = stop.time != null && stop.time!.isBefore(DateTime.now().subtract(const Duration(minutes: 1)));
     final timeColor =
         passed ? cs.outline : (certainty == Certainty.scheduled ? cs.onSurface : certaintyColor(context, certainty));
+    final dot = Container(
+      width: first || last ? 14 : 10,
+      height: first || last ? 14 : 10,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: cs.surface,
+        border: Border.all(color: color, width: 3),
+      ),
+    );
     return Opacity(
-      opacity: passed ? 0.55 : 1,
+      opacity: passed && !busHere ? 0.55 : 1,
       child: SizedBox(
         height: 48,
         child: Row(children: [
@@ -147,21 +241,14 @@ class _StopRow extends StatelessWidget {
                 style: emphasized(context).labelLarge.copyWith(color: timeColor)),
           ),
           SizedBox(
+            key: lineKey,
             width: 24,
             child: Stack(alignment: Alignment.center, children: [
               Column(children: [
                 Expanded(child: Container(width: 4, color: first ? Colors.transparent : color)),
                 Expanded(child: Container(width: 4, color: last ? Colors.transparent : color)),
               ]),
-              Container(
-                width: first || last ? 14 : 10,
-                height: first || last ? 14 : 10,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: cs.surface,
-                  border: Border.all(color: color, width: 3),
-                ),
-              ),
+              busHere ? _BusBadge(color: _busColor(context, certainty)) : dot,
             ]),
           ),
           const SizedBox(width: 12),
@@ -177,6 +264,29 @@ class _StopRow extends StatelessWidget {
           const SizedBox(width: 16),
         ]),
       ),
+    );
+  }
+}
+
+/// The bus on the stop list's line: a filled circle with a bus icon,
+/// colored like its live times.
+class _BusBadge extends StatelessWidget {
+  const _BusBadge({required this.color});
+  final Color color;
+  static const size = 24.0;
+
+  @override
+  Widget build(BuildContext context) {
+    final fg = ThemeData.estimateBrightnessForColor(color) == Brightness.dark ? Colors.white : Colors.black;
+    return Container(
+      width: size,
+      height: size,
+      decoration: BoxDecoration(
+        shape: BoxShape.circle,
+        color: color,
+        border: Border.all(color: Theme.of(context).colorScheme.surface, width: 2),
+      ),
+      child: Icon(Icons.directions_bus_rounded, size: 14, color: fg),
     );
   }
 }
