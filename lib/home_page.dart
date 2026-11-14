@@ -112,10 +112,13 @@ class _HomePageState extends State<HomePage> {
     final wanted = <String, void Function(Object?)>{};
     final trips = <String>{};
     for (final l in legs) {
-      final stop = l.fromStopId, trip = l.backendTripId, raw = l.tripId;
-      if (stop == null || trip == null || raw == null || !tramite.covers(stop) || !tramite.covers(trip)) continue;
+      final stop = l.fromStopId, trip = l.backendTripId, raw = l.tripId, prefix = tramite.prefixOf(l.backendTripId);
+      if (stop == null || trip == null || raw == null || prefix == null || !tramite.covers(stop)) continue;
       trips.add(raw);
-      wanted[TramiteClient.departuresTopic(stop, tripId: trip)] = (data) {
+      final line = l.routeShortName;
+      final topic = TramiteClient.departuresTopic(stop,
+          tripId: trip, lineId: line == null ? null : TramiteClient.lineId(prefix, line));
+      wanted[topic] = (data) {
         if (!mounted) return;
         final row = TramiteClient.parseRows(data).firstOrNull;
         setState(() {

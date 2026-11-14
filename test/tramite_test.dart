@@ -94,6 +94,8 @@ void main() {
     expect(t.prefixOf('it-Lazio-Rome_60'), 'it-Lazio-Rome');
     expect(TramiteClient.lineId('it-Lazio-Rome', '85'), 'it-Lazio-Rome_85');
     expect(TramiteClient.departuresTopic('it-Lazio-Rome_71527', tripId: 'T'), 'departures=it-Lazio-Rome_71527,trip=T');
+    expect(TramiteClient.departuresTopic('it-Lazio-Cotral_f13889', tripId: 'T', lineId: 'it-Lazio-Cotral_MR1A'),
+        'departures=it-Lazio-Cotral_f13889,trip=T,line=it-Lazio-Cotral_MR1A');
   });
 
   test('coverage: unreachable Tramite covers nothing', () async {

@@ -85,8 +85,12 @@ class TramiteClient {
 
   // ---- topics ----
 
-  static String departuresTopic(String stopId, {String? tripId}) =>
-      tripId == null ? 'departures=$stopId' : 'departures=$stopId,trip=$tripId';
+  /// A stop's departures; with [tripId], that trip's row at the stop only.
+  /// [lineId] (the trip's line) lets Tramite match a trip id of another
+  /// timetable version (Transitous may lag a feed that renumbers its trips).
+  static String departuresTopic(String stopId, {String? tripId, String? lineId}) => tripId == null
+      ? 'departures=$stopId'
+      : 'departures=$stopId,trip=$tripId${lineId == null ? '' : ',line=$lineId'}';
   static String lineTopic(String lineId) => 'line=$lineId';
   static String bboxTopic(LatLngBounds b) => 'bbox=${[
         b.southwest.latitude,
