@@ -17,6 +17,7 @@ class Place {
     this.kind = PlaceKind.place,
     this.stopId,
     this.station = false,
+    this.onBoard,
   });
   final String name;
   final String? subtitle;
@@ -30,6 +31,30 @@ class Place {
   /// A whole station (metro / rail) rather than one stop pole: its timetable
   /// covers all its platforms and both directions.
   final bool station;
+
+  /// Set when this origin is a vehicle you are riding, not a place: trips
+  /// start on board and say where to get off.
+  final OnBoardRide? onBoard;
+}
+
+/// The vehicle run you are riding (see [Place.onBoard]).
+class OnBoardRide {
+  const OnBoardRide({
+    required this.backendTripId,
+    required this.tripId,
+    required this.line,
+    required this.mode,
+    required this.headsign,
+  });
+
+  /// The planner's id for the run.
+  final String backendTripId;
+
+  /// Raw GTFS trip_id (see top of file).
+  final String tripId;
+  final String line;
+  final String mode;
+  final String headsign;
 }
 
 /// Knobs a planner may honour. Backends map these to their own parameters
@@ -170,6 +195,7 @@ class Leg {
     this.origin,
     this.fromStopId,
     this.toStopId,
+    this.onBoard = false,
   });
 
   /// WALK, BUS, TRAM, SUBWAY, RAIL, ...
@@ -209,6 +235,10 @@ class Leg {
   final String? fromStopId;
   final String? toStopId;
 
+  /// The ride you are already on (see [OnBoardRide]): it starts where the
+  /// vehicle is now, there's nothing to catch, and it can't be swapped.
+  final bool onBoard;
+
   Duration get duration => end.difference(start);
 
   /// Same leg moved in time (used to re-time walks when a ride is swapped).
@@ -241,6 +271,7 @@ class Leg {
       origin: origin,
       fromStopId: fromStopId,
       toStopId: toStopId,
+      onBoard: onBoard,
     );
   }
 }

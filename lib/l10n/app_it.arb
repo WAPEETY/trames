@@ -102,5 +102,18 @@
   "creditOpenMapTiles": "Schema delle tile vettoriali",
   "creditOpenFreeMap": "Tile e stile della mappa",
   "creditRomaMobilita": "Orari e dati in tempo reale",
-  "creditOpentransit": "API per la pianificazione dei viaggi"
+  "creditOpentransit": "API per la pianificazione dei viaggi",
+
+  "imOnBoard": "Sono a bordo",
+  "onBoardOrigin": "Sul {line} → {headsign}",
+  "onBoardPickDestination": "Sei sul {line}: scegli dove vai",
+  "onBoardTripOver": "Questa corsa non ha più fermate",
+  "tagStayOnBoard": "Resta a bordo",
+  "itineraryGetOff": "Scendi a {stop}",
+  "itineraryStayOn": "Resta a bordo fino a {stop}",
+  "onBoardYouAreOn": "Sei sul {line}",
+  "onBoardQuestion": "Sei sul {line}?",
+  "yes": "Sì",
+  "no": "No",
+  "leaveBoard": "Non sono più a bordo"
 }

@@ -6,9 +6,11 @@ import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'cities.dart';
 import 'models.dart';
+import 'on_board.dart';
 
 export 'cities.dart';
 export 'models.dart';
+export 'on_board.dart';
 export 'tramite.dart';
 
 /// The app talks to transit data only through these four capabilities.
@@ -23,6 +25,17 @@ abstract interface class TripPlanner {
   /// Itineraries departing from now on, in any order. [options] are hints;
   /// a backend ignores the ones it does not support.
   Future<List<Itinerary>> plan(LatLng from, LatLng to, {PlanOptions options = const PlanOptions()});
+}
+
+/// Optional for a [TripPlanner]: plans for someone already riding a vehicle
+/// (see on_board.dart).
+abstract interface class OnBoardPlanner {
+  /// The run [backendTripId] with its latest live times (not cached).
+  Future<TripInfo> liveTrip(String backendTripId);
+
+  /// Itineraries starting on board [trip]: each begins with an
+  /// [Leg.onBoard] ride to where you get off.
+  Future<List<Itinerary>> planOnBoard(OnBoardTrip trip, LatLng to, {PlanOptions options = const PlanOptions()});
 }
 
 abstract interface class PlaceSearch {

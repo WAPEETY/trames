@@ -399,7 +399,15 @@ class ItineraryRow extends StatelessWidget {
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(legs.isEmpty ? context.l10n.itineraryWalk : context.l10n.itineraryLeave(inMinutes(context.l10n, it.start)),
+            Text(
+                legs.isEmpty
+                    ? context.l10n.itineraryWalk
+                    // Already riding: where to get off, not when to leave.
+                    : legs.first.onBoard
+                        ? (staysOnBoard(it)
+                            ? context.l10n.itineraryStayOn(titleCase(legs.first.toName))
+                            : context.l10n.itineraryGetOff(titleCase(legs.first.toName)))
+                        : context.l10n.itineraryLeave(inMinutes(context.l10n, it.start)),
                 style: emphasized(context).titleMedium.copyWith(color: cs.onSurface)),
             const SizedBox(height: 2),
             times,
@@ -527,7 +535,11 @@ class LegRow extends StatelessWidget {
               ),
             ]),
             const SizedBox(height: 8),
-            Text('${titleCase(leg.fromName)} → ${titleCase(leg.toName)}', style: tt.bodyMedium?.copyWith(color: cs.onSurface)),
+            Text(
+                leg.onBoard
+                    ? context.l10n.itineraryGetOff(titleCase(leg.toName))
+                    : '${titleCase(leg.fromName)} → ${titleCase(leg.toName)}',
+                style: tt.bodyMedium?.copyWith(color: cs.onSurface)),
             Text(
               context.l10n.legSummary(leg.intermediateStops, mins, hm(leg.end)),
               style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
@@ -602,6 +614,7 @@ class _RouteTagChip extends StatelessWidget {
       RouteTag.fewestChanges => (Icons.swap_horiz_rounded, context.l10n.tagFewestChanges),
       RouteTag.leastWalking => (Icons.directions_walk_rounded, context.l10n.tagLeastWalking),
       RouteTag.onFoot => (Icons.directions_walk_rounded, context.l10n.tagFasterOnFoot),
+      RouteTag.stayOnBoard => (Icons.event_seat_rounded, context.l10n.tagStayOnBoard),
     };
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 3, 10, 3),

@@ -48,7 +48,7 @@ class RankPolicy {
 
 const kRankPolicy = RankPolicy();
 
-enum RouteTag { fastest, fewestChanges, leastWalking, onFoot }
+enum RouteTag { fastest, fewestChanges, leastWalking, onFoot, stayOnBoard }
 
 /// All departures of one line sequence, earliest arrival first.
 class RouteGroup {
@@ -82,6 +82,7 @@ class RouteSearch {
     this.walks,
     this.policy = kWalkPolicy,
     this.rank = kRankPolicy,
+    this.stayOn = kStayOnPolicy,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -93,7 +94,40 @@ class RouteSearch {
   final WalkCache? walks;
   final WalkPolicy policy;
   final RankPolicy rank;
+
+  /// When getting off the vehicle you ride is worth it (on-board searches).
+  final StayOnPolicy stayOn;
   final DateTime Function() _clock;
+
+  /// Routes for someone riding [ride] now (needs an [OnBoardPlanner]): every
+  /// route starts on board. Staying on comes first, getting off only when
+  /// it clearly pays ([stayOn]). Throws [OnBoardTripOver] when the ride has
+  /// no stops left.
+  Future<List<RouteGroup>> searchOnBoard(OnBoardRide ride, LatLng to, {String toName = ''}) async {
+    final TripPlanner p = planner;
+    if (p is! OnBoardPlanner) throw UnsupportedError('This planner cannot plan from a vehicle');
+    final onBoard = p as OnBoardPlanner;
+    final trip = OnBoardTrip(ride, await onBoard.liveTrip(ride.backendTripId), now: _clock());
+    if (trip.remaining.isEmpty) throw const OnBoardTripOver();
+    final cache = walks;
+    final stay = cache == null
+        ? Future<Itinerary?>.value()
+        : stayOnBoard(trip, to, cache, toName: toName).catchError((Object _) => null);
+    Object? firstError;
+    final batches = await Future.wait(profiles.map((pr) async {
+      try {
+        return await onBoard.planOnBoard(trip, to, options: pr.options);
+      } catch (e) {
+        firstError ??= e;
+        return <Itinerary>[];
+      }
+    }));
+    final stayIt = await stay;
+    if (batches.every((b) => b.isEmpty) && stayIt == null && firstError != null) throw firstError!;
+    final all = [for (final it in [...batches.expand((b) => b), ?stayIt]) trimAlternatives(it)];
+    final walked = cache == null ? all : await applyWalkRules(all);
+    return group(preferStayingOn(walked, now: trip.now, policy: stayOn));
+  }
 
   Future<List<RouteGroup>> search(LatLng from, LatLng to) async {
     Object? firstError;
@@ -222,7 +256,8 @@ class RouteSearch {
     final now = _clock().subtract(const Duration(minutes: 1));
     final unique = <String, Itinerary>{};
     for (final it in all) {
-      if (it.start.isBefore(now)) continue;
+      // Gone, unless it starts on the vehicle you're already on.
+      if (it.start.isBefore(now) && !(it.legs.firstOrNull?.onBoard ?? false)) continue;
       // Same lines on the same vehicles = same trip, whatever the walking
       // around it. Walking the whole way is one option, whenever you leave.
       final key = it.walkOnly
@@ -286,6 +321,16 @@ class RouteSearch {
       result
         ..remove(walk)
         ..insert(0, walk);
+    }
+
+    // On board: staying on first (only changes worth it are left, see
+    // preferStayingOn).
+    final stay = result.where((g) => staysOnBoard(g.best)).firstOrNull;
+    if (stay != null) {
+      stay.tags.add(RouteTag.stayOnBoard);
+      result
+        ..remove(stay)
+        ..insert(0, stay);
     }
     return result;
   }

@@ -47,19 +47,22 @@ class TripVariants {
       final end = i + 1 < base.legs.length && !base.legs[i + 1].transit ? i + 1 : i;
       final seen = <String>{leg.tripId ?? '${leg.routeShortName}@${leg.start}'};
       final from = base.legs[start].from, to = base.legs[end].to;
-      bool keep(Leg ride) => ride.duration > policy.hideRidesUpTo;
+      // The ride you're on can't be swapped, walked or hidden.
+      final pinned = leg.onBoard;
+      bool keep(Leg ride) => pinned || ride.duration > policy.hideRidesUpTo;
       _slots.add(_Slot(
         start,
         end,
         [
           if (keep(leg)) base.legs.sublist(start, end + 1),
           for (final alt in leg.alternatives)
-            if (keep(alt.ride) &&
+            if (!pinned &&
+                keep(alt.ride) &&
                 alt.reachableFrom(now) &&
                 seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}'))
               alt.legs,
         ],
-        walkable: walks != null && distanceMeters(from, to) / 1000 <= policy.maxWalkKm,
+        walkable: !pinned && walks != null && distanceMeters(from, to) / 1000 <= policy.maxWalkKm,
         hidden: !keep(leg),
       ));
     }

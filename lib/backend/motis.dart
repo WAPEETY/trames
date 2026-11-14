@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:http/http.dart' as http;
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -9,7 +10,7 @@ import 'backend.dart';
 ///
 /// Transitous (https://transitous.org) is a public MOTIS instance; a
 /// self-hosted MOTIS uses this same class with a different [baseUrl].
-class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, TripDetails, WalkRouter {
+class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoards, TripPaths, TripDetails, WalkRouter {
   MotisClient({
     this.baseUrl = 'https://api.transitous.org',
     this.language = 'it',
@@ -38,6 +39,15 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
   Future<dynamic> _get(String path, Map<String, String> query) async {
     final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
     final res = await _client.get(uri, headers: kHeaders).timeout(const Duration(seconds: 30));
+    if (res.statusCode != 200) throw Exception('MOTIS ${res.statusCode}: ${res.body}');
+    return jsonDecode(utf8.decode(res.bodyBytes));
+  }
+
+  Future<dynamic> _post(String path, Map<String, String> query, Object body) async {
+    final uri = Uri.parse('$baseUrl$path').replace(queryParameters: query);
+    final res = await _client
+        .post(uri, headers: {...kHeaders, 'Content-Type': 'application/json'}, body: jsonEncode(body))
+        .timeout(const Duration(seconds: 30));
     if (res.statusCode != 200) throw Exception('MOTIS ${res.statusCode}: ${res.body}');
     return jsonDecode(utf8.decode(res.bodyBytes));
   }
@@ -93,20 +103,91 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
         'maxPostTransitTime': '${o.maxWalkMinutes! * 60}',
       },
     }) as Map<String, dynamic>;
-    Itinerary parse(Map<String, dynamic> it) => Itinerary(
-          start: _time(it['startTime']),
-          end: _time(it['endTime']),
-          transfers: it['transfers'] as int? ?? 0,
-          legs: [
-            for (final l in it['legs'] as List)
-              if (!_sameStopWalk(l as Map<String, dynamic>)) _leg(l),
-          ],
-        );
     return [
-      for (final it in d['itineraries'] as List) parse(it as Map<String, dynamic>),
+      for (final it in d['itineraries'] as List) _itinerary(it as Map<String, dynamic>),
       // Walking the whole way (offered by the planner when short enough).
       for (final it in (d['direct'] as List? ?? const []))
-        if (((it as Map)['legs'] as List).every((l) => (l as Map)['mode'] == 'WALK')) parse(it as Map<String, dynamic>),
+        if (((it as Map)['legs'] as List).every((l) => (l as Map)['mode'] == 'WALK')) _itinerary(it as Map<String, dynamic>),
+    ];
+  }
+
+  Itinerary _itinerary(Map<String, dynamic> it) => Itinerary(
+        start: _time(it['startTime']),
+        end: _time(it['endTime']),
+        transfers: it['transfers'] as int? ?? 0,
+        legs: [
+          for (final l in it['legs'] as List)
+            if (!_sameStopWalk(l as Map<String, dynamic>)) _leg(l),
+        ],
+      );
+
+  // ---- OnBoardPlanner ----
+
+  @override
+  Future<TripInfo> liveTrip(String backendTripId) async {
+    final t = await _fetchTrip(backendTripId);
+    _trips[backendTripId] = Future.value(t); // the line view gets the fresh times too
+    return t;
+  }
+
+  /// Stops near the ones a ride still calls at, per ride and next stop (the
+  /// profiles of one search ask at once).
+  final _nearRide = <String, Future<List<Stop>>>{};
+
+  Future<List<Stop>> _stopsNear(OnBoardTrip trip) {
+    final key = '${trip.ride.backendTripId}@${trip.remaining.first.stopId}';
+    if (_nearRide.length > 20) _nearRide.clear();
+    return _nearRide[key] ??= () async {
+      final pts = trip.remaining.map((s) => s.position);
+      final dLat = kOnBoardWalkMeters / 111000, dLon = dLat / 0.75;
+      try {
+        return await stopsInArea(
+          LatLngBounds(
+            southwest: LatLng(pts.map((p) => p.latitude).reduce(math.min) - dLat,
+                pts.map((p) => p.longitude).reduce(math.min) - dLon),
+            northeast: LatLng(pts.map((p) => p.latitude).reduce(math.max) + dLat,
+                pts.map((p) => p.longitude).reduce(math.max) + dLon),
+          ),
+          from: trip.position,
+        );
+      } catch (_) {
+        return const <Stop>[]; // the vehicle's own stops still work
+      }
+    }();
+  }
+
+  /// MOTIS can't start on a vehicle: it gets the stops still ahead (and
+  /// those a short walk from them) as client offsets (see on_board.dart).
+  @override
+  Future<List<Itinerary>> planOnBoard(OnBoardTrip trip, LatLng to, {PlanOptions options = const PlanOptions()}) async {
+    if (trip.remaining.isEmpty) return const [];
+    final o = options;
+    final offsets = onBoardOffsets(trip, await _stopsNear(trip),
+        walkSpeed: (walkingSpeedKmh ?? 4.3) / 3.6);
+    final d = await _post('/api/v6/plan', {
+      // Only draws the planner's fake first leg (replaced afterwards).
+      'fromPlace': _ll(trip.position),
+      'toPlace': _ll(to),
+      'time': motisTime(trip.now),
+      // You can't leave later: earliest arrival from now, not a time window.
+      'timetableView': 'false',
+      // No walking (or cycling) from where the vehicle is.
+      'directModes': '',
+      'numItineraries': '8',
+      'detailedLegs': 'true',
+      ..._pace,
+      if (o.legAlternatives > 0) 'numLegAlternatives': '${o.legAlternatives}',
+      // The ride you're on is invisible to MOTIS: one change fewer for it.
+      if (o.maxTransfers != null) 'maxTransfers': '${math.max(0, o.maxTransfers! - 1)}',
+      if (o.extraTransferMinutes != null) 'additionalTransferTime': '${o.extraTransferMinutes}',
+      if (o.maxWalkMinutes != null) 'maxPostTransitTime': '${o.maxWalkMinutes! * 60}',
+    }, {
+      'fromOffsets': [
+        for (final off in offsets.values) {'stopId': off.stopId, 'duration': math.max(0, off.offset.inSeconds)},
+      ],
+    }) as Map<String, dynamic>;
+    return [
+      for (final it in d['itineraries'] as List) ?fromOnBoardPlan(_itinerary(it as Map<String, dynamic>), trip, offsets),
     ];
   }
 

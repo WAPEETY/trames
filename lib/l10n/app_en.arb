@@ -126,5 +126,25 @@
   "creditOpenMapTiles": "Vector tile schema",
   "creditOpenFreeMap": "Map tiles and style",
   "creditRomaMobilita": "Transit timetable and live data",
-  "creditOpentransit": "Trip planning API"
+  "creditOpentransit": "Trip planning API",
+
+  "imOnBoard": "I'm on board",
+  "@imOnBoard": {"description": "Button in a bus's view: plan journeys starting on this vehicle."},
+  "onBoardOrigin": "On the {line} → {headsign}",
+  "@onBoardOrigin": {"description": "Journey origin when riding a vehicle.", "placeholders": {"line": {"type": "String"}, "headsign": {"type": "String"}}},
+  "onBoardPickDestination": "You're on the {line}: choose where you're going",
+  "@onBoardPickDestination": {"placeholders": {"line": {"type": "String"}}},
+  "onBoardTripOver": "This ride has no stops left",
+  "tagStayOnBoard": "Stay on board",
+  "itineraryGetOff": "Get off at {stop}",
+  "@itineraryGetOff": {"placeholders": {"stop": {"type": "String"}}},
+  "itineraryStayOn": "Stay on until {stop}",
+  "@itineraryStayOn": {"placeholders": {"stop": {"type": "String"}}},
+  "onBoardYouAreOn": "You're on the {line}",
+  "@onBoardYouAreOn": {"description": "Floating toolbar while journeys start on a vehicle.", "placeholders": {"line": {"type": "String"}}},
+  "onBoardQuestion": "Are you on the {line}?",
+  "@onBoardQuestion": {"description": "Asked when you seem to be riding a bus.", "placeholders": {"line": {"type": "String"}}},
+  "yes": "Yes",
+  "no": "No",
+  "leaveBoard": "Not on board any more"
 }

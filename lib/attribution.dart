@@ -12,7 +12,7 @@ class MapCredit extends StatelessWidget {
   Widget build(BuildContext context) {
     final dark = Theme.of(context).brightness == Brightness.dark;
     return Align(
-      alignment: Alignment.topLeft,
+      alignment: Alignment.bottomLeft,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: () => showAttributionSheet(context),

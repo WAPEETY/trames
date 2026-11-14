@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
@@ -8,6 +9,7 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
 import 'backend/backend.dart';
+import 'backend/board_detector.dart';
 import 'backend/config.dart';
 import 'backend/estimated_rides.dart';
 import 'backend/live_connection.dart';
@@ -19,6 +21,7 @@ import 'attribution.dart';
 import 'favorites.dart';
 import 'l10n.dart';
 import 'line_view.dart';
+import 'on_board_bar.dart';
 import 'live_buses.dart';
 import 'route_picker.dart';
 import 'sheet_widgets.dart';
@@ -56,7 +59,7 @@ class HomePage extends StatefulWidget {
   State<HomePage> createState() => _HomePageState();
 }
 
-class _HomePageState extends State<HomePage> {
+class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin {
   /// The configured city around the map / you (null: Transitous only).
   CityConfig? city = kCities.first;
   late TransitBackend backend = createBackend(city: city);
@@ -64,6 +67,18 @@ class _HomePageState extends State<HomePage> {
   /// Where to start without location: the city's, else the first city's.
   Place get _fallback => (city ?? kCities.first).fallbackCenter;
   final sheet = M3EBottomSheetController();
+
+  /// The sheet's height, followed frame by frame while it moves (the
+  /// controller only says when it settles), for what sits right above it.
+  final _sheetTop = ValueNotifier<double>(0);
+  late final Ticker _sheetTicker = createTicker(_onSheetTick);
+  var _sheetStill = 0;
+  var _sheetTouched = false;
+
+  /// Asking "are you on the 341?" when you seem to ride a bus.
+  final _boardDetector = BoardDetector();
+  ({String id, Vehicle vehicle})? _boardQuestion;
+  StreamSubscription<Position>? _positions;
   final toSearch = M3ESearchController();
   final fromSearch = M3ESearchController();
   MapLibreMapController? map;
@@ -290,6 +305,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _lifecycle;
+    sheet.addListener(_followSheet);
     // What Tramite covers decides, per stop and ride, where live data comes
     // from; until it answers, Transitous.
     tramite.loadCoverage().then((_) {
@@ -307,13 +323,21 @@ class _HomePageState extends State<HomePage> {
         _plan(silent: true);
       }
     });
-    clock = Timer.periodic(const Duration(seconds: 15), (_) => mounted ? setState(() {}) : null);
+    clock = Timer.periodic(const Duration(seconds: 15), (_) {
+      if (!mounted) return;
+      _checkBoarding(); // buses move even when you don't get a new fix
+      setState(() {});
+    });
   }
 
   @override
   void dispose() {
     refreshTimer?.cancel();
     clock?.cancel();
+    _positions?.cancel();
+    sheet.removeListener(_followSheet);
+    _sheetTicker.dispose();
+    _sheetTop.dispose();
     idleDebounce?.cancel();
     _lifecycle.dispose();
     _leaveBrowsing();
@@ -340,6 +364,7 @@ class _HomePageState extends State<HomePage> {
           _switchCityFor(here!);
           from = _myLocation(here!);
           map?.animateCamera(CameraUpdate.newLatLngZoom(here!, 15.5));
+          _followLocation();
         }
       }
     } catch (_) {
@@ -352,10 +377,72 @@ class _HomePageState extends State<HomePage> {
     _refreshArea();
   }
 
+  /// Keeps [here] current (and "My location" with it), for the center
+  /// button and to notice you riding a bus.
+  void _followLocation() {
+    _positions ??= Geolocator.getPositionStream(locationSettings: const LocationSettings(distanceFilter: 10)).listen(
+      (pos) {
+        if (!mounted) return;
+        setState(() {
+          here = LatLng(pos.latitude, pos.longitude);
+          if (from.isMyLocation) from = _myLocation(here!);
+        });
+        _checkBoarding();
+      },
+      onError: (Object _) {},
+    );
+  }
+
+  /// A bus has stayed near you while you moved: ask whether you're on it.
+  void _checkBoarding() {
+    final p = here;
+    if (p == null || from.onBoard != null || _boardQuestion != null) return;
+    final all = {...areaBuses.tracker.buses, ...tracker.buses};
+    final id = _boardDetector.update(p, {for (final e in all.entries) e.key: e.value.drawn}, DateTime.now());
+    final v = id == null ? null : all[id]?.vehicle;
+    if (v == null || v.routeShortName == null || v.backendTripId == null) return;
+    HapticFeedback.mediumImpact();
+    setState(() => _boardQuestion = (id: id!, vehicle: v));
+  }
+
+  void _answerBoarding(bool yes) {
+    final q = _boardQuestion;
+    if (q == null) return;
+    setState(() => _boardQuestion = null);
+    if (yes) {
+      _board(q.vehicle);
+    } else {
+      _boardDetector.dismiss(q.id, DateTime.now()); // other buses may still be asked about
+    }
+  }
+
+  /// Follows the sheet's height until it has stopped moving.
+  void _followSheet() {
+    _sheetStill = 0;
+    if (!_sheetTicker.isActive) _sheetTicker.start();
+  }
+
+  void _onSheetTick(Duration _) {
+    final e = sheet.extent;
+    if ((e - _sheetTop.value).abs() > 0.5) {
+      _sheetTop.value = e;
+      _sheetStill = 0;
+    } else if (!_sheetTouched && ++_sheetStill > 10) {
+      _sheetTicker.stop();
+    }
+  }
+
+  /// The map is centred on you (nothing for the center button to do).
+  bool get _centeredOnMe {
+    final p = here, c = map?.cameraPosition?.target;
+    return p == null || (c != null && distanceMeters(p, c) < 40);
+  }
+
   // ---------- data ----------
 
   /// Map stopped moving: after [kAreaIdleDelay] load what's in view.
   void _onCameraIdle() {
+    setState(() {}); // the center button shows only when away from you
     _updateAreaBuses();
     if (to != null || line != null) return; // the area list isn't shown
     idleDebounce?.cancel();
@@ -509,7 +596,11 @@ class _HomePageState extends State<HomePage> {
     try {
       // Several planner profiles merged and grouped by line sequence,
       // groups ordered by earliest arrival (see RouteSearch).
-      final list = await routeSearch.search(from.position, dest.position);
+      // On a bus: every route starts on board (see on_board.dart).
+      final list = switch (from.onBoard) {
+        final ride? => await routeSearch.searchOnBoard(ride, dest.position, toName: dest.name),
+        null => await routeSearch.search(from.position, dest.position),
+      };
       if (!mounted || to != dest) return;
       setState(() {
         _routeItineraries = [for (final g in list) ...g.options];
@@ -519,6 +610,8 @@ class _HomePageState extends State<HomePage> {
         _syncLegTopics();
         routes = _buildRoutes();
       });
+    } on OnBoardTripOver {
+      if (mounted) setState(() => error = context.l10n.onBoardTripOver);
     } catch (e) {
       if (mounted) setState(() => error = '$e');
     } finally {
@@ -677,6 +770,81 @@ class _HomePageState extends State<HomePage> {
       hint: stop == null ? null : (stopId: stop, at: DateTime.now()),
     );
   }
+
+  /// A map long press: on a bus, you're riding it ([_board]); elsewhere,
+  /// a dropped pin to go to.
+  Future<void> _onMapLongPress(math.Point<double> point, LatLng ll) async {
+    final m = map;
+    if (m != null && styleReady) {
+      try {
+        // A finger is bigger than a bus dot: a box around the press.
+        final hits = await m.queryRenderedFeaturesInRect(
+            Rect.fromCenter(center: Offset(point.x, point.y), width: 36, height: 36),
+            ['area-buses-circle', 'buses-circle'],
+            null);
+        for (final f in hits) {
+          final id = '${(f as Map)['properties']?['id'] ?? f['id']}';
+          final v = areaBuses.tracker.buses[id]?.vehicle ?? tracker.buses[id]?.vehicle;
+          if (v != null) {
+            _board(v);
+            return;
+          }
+        }
+      } catch (_) {
+        // can't tell: treat it as a pin
+      }
+    }
+    if (mounted) _setDestination(Place(name: context.l10n.droppedPin, position: ll));
+  }
+
+  /// You're riding [v]: journeys start on board from now on, the toolbar at
+  /// the top says so (its ✕ goes back to your location). Its run is looked up in
+  /// the planner, under another id if it came from another timetable
+  /// version (see TripDetails.sameRun).
+  Future<void> _board(Vehicle v) async {
+    final trips = backend.trips;
+    final id = v.backendTripId, name = v.routeShortName;
+    if (trips == null || id == null || name == null) return;
+    HapticFeedback.heavyImpact();
+    if (_boardQuestion != null) setState(() => _boardQuestion = null);
+    String? plannerId = id;
+    TripInfo? info;
+    try {
+      info = await trips.trip(id);
+    } catch (_) {
+      try {
+        final stop = v.stopId;
+        plannerId = stop == null ? null : await trips.sameRun(id, stopId: stop, at: DateTime.now(), line: name);
+        if (plannerId != null) info = await trips.trip(plannerId);
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    if (plannerId == null || info == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(context.l10n.errorLoadLine(name))));
+      return;
+    }
+    final place = Place(
+      name: context.l10n.onBoardOrigin(name, titleCase(info.headsign)),
+      position: v.position,
+      onBoard: OnBoardRide(
+        backendTripId: plannerId,
+        tripId: MotisClient.rawTripId(plannerId) ?? plannerId,
+        line: name,
+        mode: info.mode,
+        headsign: info.headsign,
+      ),
+    );
+    if (line != null) _closeLine();
+    await _setOrigin(place);
+    if (mounted && to == null) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(context.l10n.onBoardPickDestination(name))));
+    }
+  }
+
+  /// Off the bus: journeys start from your location again.
+  void _leaveBoard() => _setOrigin(here != null ? _myLocation(here!) : _fallback);
 
   /// Trip id of the other direction, if a live bus is running it.
   String? _otherDirection() {
@@ -913,7 +1081,8 @@ class _HomePageState extends State<HomePage> {
     await map!.setGeoJsonSource(
         'endpoints',
         _collection([
-          if (to != null && !from.isMyLocation) _point(from.position, {'color': '#43A047'}),
+          // (On board the origin moves with the bus: no fixed dot.)
+          if (to != null && !from.isMyLocation && from.onBoard == null) _point(from.position, {'color': '#43A047'}),
           if (to != null) _point(to!.position, {'color': '#E53935'}),
         ]));
   }
@@ -1339,7 +1508,8 @@ class _HomePageState extends State<HomePage> {
 
   void _swap() {
     final dest = to;
-    if (dest == null) return;
+    // A bus you're on can't be where you go.
+    if (dest == null || from.onBoard != null) return;
     final origin = from;
     _deselect();
     setState(() {
@@ -1356,6 +1526,10 @@ class _HomePageState extends State<HomePage> {
 
   @override
   Widget build(BuildContext context) {
+    // Content changes can change the sheet's height too.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _followSheet();
+    });
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs = Theme.of(context).colorScheme;
     return PopScope(
@@ -1384,44 +1558,82 @@ class _HomePageState extends State<HomePage> {
               // Keeps controller.cameraPosition (centre, zoom) current; the
               // area logic reads it after every move.
               trackCameraPosition: true,
-              onMapLongClick: (_, ll) => _setDestination(Place(name: context.l10n.droppedPin, position: ll)),
+              onMapLongClick: _onMapLongPress,
               myLocationEnabled: locationGranted,
               compassEnabled: false,
               attributionEnabled: false, // replaced by MapCredit
             ),
-            SafeArea(
+            // Credit and center button ride right above the sheet.
+            ValueListenableBuilder<double>(
+              valueListenable: _sheetTop,
+              builder: (context, top, child) => top > MediaQuery.sizeOf(context).height * 0.6
+                  ? const SizedBox.shrink() // sheet up: nothing to sit on
+                  : Positioned(left: 0, right: 0, bottom: top, child: child!),
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(4, 4, 12, 0),
-                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                padding: const EdgeInsets.fromLTRB(4, 0, 12, 8),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [
                   const MapCredit(),
                   const Spacer(),
                   if (here != null)
-                    M3EIconButton(
-                      icon: const Icon(Icons.my_location_rounded),
-                      tooltip: context.l10n.myLocation,
-                      variant: M3EIconButtonVariant.tonal,
-                      size: M3EIconButtonSize.md,
-                      onPressed: _recenter,
+                    AnimatedScale(
+                      scale: _centeredOnMe ? 0 : 1,
+                      duration: const Duration(milliseconds: 250),
+                      curve: Curves.easeOutBack,
+                      child: M3EIconButton(
+                        icon: const Icon(Icons.my_location_rounded),
+                        tooltip: context.l10n.myLocation,
+                        variant: M3EIconButtonVariant.tonal,
+                        size: M3EIconButtonSize.md,
+                        onPressed: _centeredOnMe ? null : _recenter,
+                      ),
                     ),
                 ]),
               ),
             ),
+            // On board (or asked whether you are): floating toolbar on top.
+            if (from.onBoard case final ride?)
+              Positioned.fill(
+                // (The toolbar's own safeArea flag leaves it under the status bar.)
+                child: SafeArea(
+                  child: OnBoardBar(line: ride.line, mode: ride.mode, headsign: ride.headsign, onLeave: _leaveBoard),
+                ),
+              )
+            else if (_boardQuestion case final q?)
+              Positioned.fill(
+                child: SafeArea(
+                  child: BoardQuestionBar(
+                  line: q.vehicle.routeShortName ?? '',
+                  mode: 'BUS',
+                  onYes: () => _answerBoarding(true),
+                  onNo: () => _answerBoarding(false),
+                  ),
+                ),
+              ),
             Positioned.fill(
-              child: M3EBottomSheet.standard(
-                controller: sheet,
-                // Nothing to reveal when only the search bar is shown.
-                enableDrag: !_onlySearchBar,
-                previewHeight: kSheetPeek + MediaQuery.paddingOf(context).bottom,
-                initialValue: M3EBottomSheetValue.collapsed,
-                onValueChanged: (v) {
-                  setState(() => sheetValue = v);
-                  _onSheetSettled();
+              // Touching the sheet may drag it: follow its height meanwhile.
+              child: Listener(
+                onPointerDown: (_) {
+                  _sheetTouched = true;
+                  _followSheet();
                 },
-                child: CustomScrollView(slivers: [
-                  if (selected == null && line == null) SliverToBoxAdapter(child: _searchArea()),
-                  ..._content(),
-                  SliverToBoxAdapter(child: SizedBox(height: 24 + MediaQuery.paddingOf(context).bottom)),
-                ]),
+                onPointerUp: (_) => _sheetTouched = false,
+                onPointerCancel: (_) => _sheetTouched = false,
+                child: M3EBottomSheet.standard(
+                  controller: sheet,
+                  // Nothing to reveal when only the search bar is shown.
+                  enableDrag: !_onlySearchBar,
+                  previewHeight: kSheetPeek + MediaQuery.paddingOf(context).bottom,
+                  initialValue: M3EBottomSheetValue.collapsed,
+                  onValueChanged: (v) {
+                    setState(() => sheetValue = v);
+                    _onSheetSettled();
+                  },
+                  child: CustomScrollView(slivers: [
+                    if (selected == null && line == null) SliverToBoxAdapter(child: _searchArea()),
+                    ..._content(),
+                    SliverToBoxAdapter(child: SizedBox(height: 24 + MediaQuery.paddingOf(context).bottom)),
+                  ]),
+                ),
               ),
             ),
           ]),
@@ -1701,7 +1913,7 @@ class _HomePageState extends State<HomePage> {
           // Minutes until this vehicle reaches its boarding stop. (The gap
           // between arriving on foot and boarding is ~0 by construction: the
           // planner times walks to end when the bus comes.)
-          final wait = l.transit ? minutesUntil(l.start) : null;
+          final wait = l.transit && !l.onBoard ? minutesUntil(l.start) : null; // nothing to catch on board
           final row = LegRow(
             leg: l,
             color: _colorFor(it, l),
