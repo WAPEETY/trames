@@ -136,7 +136,7 @@
   "speedLearningDescription": "Apprende mentre cammini con l'app aperta. Velocità attuale: {kmh} km/h.",
   "speedLearnedDescription": "Apprende mentre cammini con l'app aperta: {kmh} km/h, da {minutes} min di camminata. La corsa viene ignorata.",
   "speedRecalibrate": "Ricomincia",
-  "settingsPreferTitle": "Preferisco",
+  "settingsPreferTitle": "Numero di cambi",
   "preferFastest": "Sempre il percorso più veloce",
   "preferBalanced": "Bilanciare velocità e numero di cambi",
   "preferFewerChanges": "Fare meno cambi",

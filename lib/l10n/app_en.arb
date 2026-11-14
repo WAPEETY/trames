@@ -170,7 +170,7 @@
   "speedLearnedDescription": "Learned from your walks while the app is open: {kmh} km/h, from {minutes} min of walking. Running doesn't count.",
   "@speedLearnedDescription": {"placeholders": {"kmh": {"type": "double", "format": "decimalPatternDigits", "optionalParameters": {"decimalDigits": 1}}, "minutes": {"type": "int"}}},
   "speedRecalibrate": "Start over",
-  "settingsPreferTitle": "I prefer",
+  "settingsPreferTitle": "Number of changes",
   "preferFastest": "Always the fastest route",
   "preferBalanced": "Balance speed and changes",
   "preferFewerChanges": "Fewer changes",
