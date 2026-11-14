@@ -13,7 +13,18 @@ class WalkPolicy {
     this.maxWalkRequests = 6,
     this.hideRidesUpTo = const Duration(minutes: 1),
     this.maxAlternativeStopDistanceMeters = 300,
+    this.maxRideWalk,
+    this.maxStayOnWalk = const Duration(minutes: 10),
   });
+
+  /// Staying on a bus "takes you there" when the walk from its stop nearest
+  /// the destination is at most this long (see checkStayingOn).
+  final Duration maxStayOnWalk;
+
+  /// Walking replaces a ride only when the walk takes at most this long
+  /// (null: any length up to [maxWalkKm]). Longer walks stay available as a
+  /// swipe option in the trip view, not chosen by default.
+  final Duration? maxRideWalk;
 
   /// A planner "alternative" for a ride only counts as one (split pill,
   /// swipe) when it boards and gets off within this distance of the planned
@@ -49,7 +60,10 @@ class WalkPolicy {
     required Duration rideDuration,
     required DateTime rideArrival,
     required DateTime walkArrival,
+    Duration? walk,
   }) {
+    final cap = maxRideWalk;
+    if (cap != null && walk != null && walk > cap) return false;
     if (!walkArrival.isAfter(rideArrival)) {
       return true; // walking is simply faster
     }

@@ -5,11 +5,16 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 
 import 'home_page.dart';
 import 'l10n.dart';
+import 'settings.dart';
 
 /// Fallback seed when the device has no wallpaper colors (Material You).
 const kSeed = Color(0xFFD81B60);
 
-void main() => runApp(const TransitApp());
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  await appSettings.load(); // servers and preferences before the first search
+  runApp(const TransitApp());
+}
 
 class TransitApp extends StatelessWidget {
   const TransitApp({super.key});

@@ -41,7 +41,8 @@ Itinerary applyEstimatedRides(
 
   final legs = [for (final l in base.legs) l.transit ? shift(l) : l];
   if (!shifted) return it;
-  final shiftedBase = Itinerary(start: base.start, end: base.end, legs: legs, transfers: base.transfers);
+  final shiftedBase = Itinerary(
+      start: base.start, end: base.end, legs: legs, transfers: base.transfers, hiddenBecause: base.hiddenBecause);
 
   final tv = TripVariants(shiftedBase,
       walks: walks, walkSlots: it.walkSlots, choices: it.rideChoices, policy: policy, clock: clock);

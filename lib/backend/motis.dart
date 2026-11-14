@@ -20,7 +20,28 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
     http.Client? client,
   }) : _client = client ?? http.Client();
 
-  final String baseUrl;
+  String baseUrl;
+
+  /// Talk to another MOTIS server from now on (settings). Everything cached
+  /// from the old one is dropped: its ids may mean nothing to the new one.
+  void switchTo(String url) {
+    if (url == baseUrl) return;
+    baseUrl = url;
+    _trips.clear();
+    _walks.clear();
+    _feeds.clear();
+    _nearRide.clear();
+  }
+
+  /// Whether [url] answers like a MOTIS server.
+  Future<bool> checkServer(String url) async {
+    try {
+      final res = await _client.get(Uri.parse('$url/api/v1/health'), headers: kHeaders).timeout(const Duration(seconds: 10));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// MOTIS feed id of the active city (see CityConfig), to look up a typed
   /// stop number there; null outside a configured city.

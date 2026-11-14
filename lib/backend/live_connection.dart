@@ -68,6 +68,13 @@ class LiveConnection {
   }
 
   /// Back in the foreground: reopen and re-subscribe.
+  /// Opens a new stream (after the server changed); every topic is
+  /// followed again on it.
+  void reconnect() {
+    _close();
+    _ensureOpen();
+  }
+
   void resume() {
     _paused = false;
     _ensureOpen();

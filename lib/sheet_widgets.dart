@@ -60,31 +60,34 @@ class SheetSectionHeader extends StatelessWidget {
 /// Sub-header inside the route list: "Live · 3" (green, live icon) or
 /// "Scheduled · 8".
 class RouteSectionLabel extends StatelessWidget {
-  const RouteSectionLabel({super.key, required this.live, required this.count, this.onFoot = false});
+  const RouteSectionLabel(
+      {super.key, required this.live, required this.count, this.onFoot = false, this.predicted = false});
   final bool live;
   final int count;
 
   /// "On foot" (walking the whole way) instead of Live / Scheduled.
   final bool onFoot;
 
+  /// "Predicted": some ride's time is our estimate (purple or red).
+  final bool predicted;
+
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-    final color = live && !onFoot ? liveColor(context) : cs.onSurfaceVariant;
+    final l = context.l10n;
+    final (icon, label, color) = onFoot
+        ? (Icons.directions_walk_rounded, l.routeSectionOnFoot, cs.onSurfaceVariant)
+        : predicted
+            ? (certaintyIcon(Certainty.estimated)!, l.routeSectionPredicted, certaintyColor(context, Certainty.estimated))
+            : live
+                ? (Icons.sensors_rounded, l.routeSectionLive, liveColor(context))
+                : (Icons.schedule_rounded, l.routeSectionScheduled, cs.onSurfaceVariant);
     return Padding(
       padding: const EdgeInsets.fromLTRB(28, 12, 24, 8),
       child: Row(children: [
-        Icon(
-            onFoot
-                ? Icons.directions_walk_rounded
-                : live
-                    ? Icons.sensors_rounded
-                    : Icons.schedule_rounded,
-            size: 18,
-            color: color),
+        Icon(icon, size: 18, color: color),
         const SizedBox(width: 6),
-        Text(onFoot ? context.l10n.routeSectionOnFoot : (live ? context.l10n.routeSectionLive : context.l10n.routeSectionScheduled),
-            style: emphasized(context).labelLarge.copyWith(color: color)),
+        Text(label, style: emphasized(context).labelLarge.copyWith(color: color)),
         const SizedBox(width: 6),
         Text('· $count', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onSurfaceVariant)),
       ]),

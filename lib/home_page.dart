@@ -25,6 +25,8 @@ import 'line_view.dart';
 import 'on_board_bar.dart';
 import 'live_buses.dart';
 import 'route_picker.dart';
+import 'settings.dart';
+import 'settings_page.dart';
 import 'sheet_widgets.dart';
 import 'swipe_slot.dart';
 
@@ -217,7 +219,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// Favourite stops and destinations (on the device).
   final favorites = FavoritesStore()..load();
   late final WalkCache? walkCache = backend.walks == null ? null : WalkCache(backend.walks!);
-  late final RouteSearch routeSearch = RouteSearch(backend.planner, walks: walkCache);
+  /// Searches with the user's walking and change preferences (settings).
+  RouteSearch get routeSearch => RouteSearch(
+        backend.planner,
+        walks: walkCache,
+        policy: appSettings.walkPolicy,
+        rank: appSettings.rankPolicy,
+        stayOn: appSettings.routePreference.stayOn,
+        trips: backend.trips,
+      );
   List<RouteGroup> routes = [];
 
   /// The planner's itineraries behind [routes], before estimates (purple
@@ -228,10 +238,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// (purple) rides moved and connections re-planned, then grouped and
   /// ranked again; routes that can't make a connection go last.
   List<RouteGroup> _buildRoutes() {
-    if (!routeReturns.values.any((e) => e.certainty == Certainty.estimated)) return routeSearch.group(_routeItineraries);
+    // Each journey is grouped within its own section: a row's swipe options
+    // are all as sure as the row (they move when a bus turns gray, red...).
+    if (!routeReturns.values.any((e) => e.certainty == Certainty.estimated)) {
+      return routeSearch.group(_routeItineraries, sectionOf: _journeyKind);
+    }
     final groups = routeSearch.group([
-      for (final it in _routeItineraries) applyEstimatedRides(it, routeReturns, walks: walkCache),
-    ]);
+      for (final it in _routeItineraries)
+        applyEstimatedRides(it, routeReturns, walks: walkCache, policy: appSettings.walkPolicy),
+    ], sectionOf: _journeyKind);
     return [...groups.where((g) => !g.best.missedConnection), ...groups.where((g) => g.best.missedConnection)];
   }
   Itinerary? selected;
@@ -340,6 +355,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     super.initState();
     _lifecycle;
     sheet.addListener(_followSheet);
+    appSettings.addListener(_onSettingsChanged);
     // What Tramite covers decides, per stop and ride, where live data comes
     // from; until it answers, Transitous.
     tramite.loadCoverage().then((_) {
@@ -370,6 +386,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     clock?.cancel();
     _positions?.cancel();
     sheet.removeListener(_followSheet);
+    appSettings.removeListener(_onSettingsChanged);
     _sheetTicker.dispose();
     _sheetTop.dispose();
     idleDebounce?.cancel();
@@ -448,6 +465,22 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     } else {
       _boardDetector.dismiss(q.id, DateTime.now()); // other buses may still be asked about
     }
+  }
+
+  /// Preferences or servers changed: the routes shown were made with the
+  /// old ones.
+  void _onSettingsChanged() {
+    if (!mounted) return;
+    if (to != null && selected == null) {
+      _plan(silent: true);
+    } else {
+      _refreshArea(silent: true);
+    }
+  }
+
+  void _openSettings() {
+    HapticFeedback.selectionClick();
+    Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const SettingsPage()));
   }
 
   /// Follows the sheet's height until it has stopped moving.
@@ -637,7 +670,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // On a bus: every route starts on board (see on_board.dart).
       final list = switch (from.onBoard) {
         final ride? => await routeSearch.searchOnBoard(ride, dest.position, toName: dest.name),
-        null => await routeSearch.search(from.position, dest.position),
+        null => await routeSearch.search(from.position, dest.position, toName: dest.name),
       };
       if (!mounted || to != dest) return;
       setState(() {
@@ -1327,7 +1360,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     }
     // Rebuild the swipeable trip from the planner's original, with the rides
     // the walk rules replaced still walked by default.
-    final v = TripVariants(it.base ?? it, walks: walkCache, walkSlots: it.walkSlots, choices: it.rideChoices);
+    final v = TripVariants(it.base ?? it,
+        walks: walkCache, walkSlots: it.walkSlots, choices: it.rideChoices, policy: appSettings.walkPolicy);
     setState(() {
       variants = v;
       selected = v.current;
@@ -1673,6 +1707,20 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                 ]),
               ),
             ),
+            // Settings, top left; not while the on-board toolbar is up there.
+            if (from.onBoard == null && _boardQuestion == null)
+              SafeArea(
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 8, 0, 0),
+                  child: M3EIconButton(
+                    icon: const Icon(Icons.person_rounded),
+                    tooltip: context.l10n.settingsTitle,
+                    variant: M3EIconButtonVariant.tonal,
+                    size: M3EIconButtonSize.md,
+                    onPressed: _openSettings,
+                  ),
+                ),
+              ),
             // On board (or asked whether you are): floating toolbar on top.
             if (from.onBoard case final ride?)
               Positioned.fill(
@@ -1725,9 +1773,23 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     );
   }
 
-  /// A route goes under Live when its first ride is backed by a real bus.
-  bool _routeLive(RouteGroup g) =>
-      g.isLive || g.best.transitLegs.take(1).any((l) => _certainty(l.realtime, l.tripId) != Certainty.scheduled);
+  /// Which section a route goes in, by how sure each ride's time is:
+  ///  * live: every ride is on its way or waiting to start (green, yellow);
+  ///    the metro counts as live (no feed, but frequent and reliable);
+  ///  * predicted: some ride's time is our estimate (red, purple);
+  ///  * scheduled: the rest (some ride is timetable only).
+  String _routeKind(RouteGroup g) => _journeyKind(g.best);
+
+  String _journeyKind(Itinerary it) {
+    if (it.walkOnly) return 'walk';
+    if (it.missedConnection) return 'predicted';
+    final sure = [
+      for (final l in it.transitLegs) l.mode == 'SUBWAY' ? Certainty.moving : _certainty(l.realtime, l.tripId),
+    ];
+    if (sure.every((c) => c == Certainty.moving || c == Certainty.waiting)) return 'live';
+    if (sure.any((c) => c == Certainty.estimated || c == Certainty.returning)) return 'predicted';
+    return 'scheduled';
+  }
 
   /// Like [_certainty], also from the buses on the map (the line view's,
   /// whose trips aren't rides of a journey): live with its bus seen is on
@@ -1882,7 +1944,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return [
       SliverToBoxAdapter(
         child: SheetSectionHeader(
-          context.l10n.routesByArrival(routes.length),
+          context.l10n.routesByArrival(routes.where((g) => g.hiddenBecause == null).length),
           trailing: planning && routes.isNotEmpty
               ? const SizedBox(width: 24, height: 24, child: M3ELoadingIndicator(size: 24))
               : M3EIconButton(
@@ -1897,35 +1959,87 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (planning && routes.isEmpty)
         SliverToBoxAdapter(child: SheetLoading(label: context.l10n.comparingRoutes))
       else ...[
-        // Walking suggested ("Faster on foot") first, then live, then
+        // Walking suggested ("Faster on foot") first, then live, predicted,
         // timetable-only, then walking when it isn't competitive; each list
-        // keeps the arrival order.
+        // keeps the ranking order.
         for (final (label, list) in [
           (null, routes.where((g) => g.tags.contains(RouteTag.onFoot)).toList()),
-          ('live', routes.where((g) => !g.isWalk && _routeLive(g)).toList()),
-          ('scheduled', routes.where((g) => !g.isWalk && !_routeLive(g)).toList()),
+          ('live', _shown('live')),
+          ('predicted', _shown('predicted')),
+          ('scheduled', _shown('scheduled')),
           ('walk', routes.where((g) => g.isWalk && !g.tags.contains(RouteTag.onFoot)).toList()),
         ])
-          if (list.isNotEmpty) ...[
+          if (list.isNotEmpty || _hidden(label).isNotEmpty) ...[
             if (label != null)
               SliverToBoxAdapter(
-                child: RouteSectionLabel(live: label == 'live', onFoot: label == 'walk', count: list.length),
+                child: RouteSectionLabel(
+                    live: label == 'live', predicted: label == 'predicted', onFoot: label == 'walk', count: list.length),
               )
             else
               const SliverToBoxAdapter(child: SizedBox(height: 4)),
-            M3EList.sliver(
-              margin: const EdgeInsets.symmetric(horizontal: 16),
-              itemCount: list.length,
-              itemBuilder: (_, i) => RouteGroupRow(
-                group: list[i],
-                colorFor: _colorFor,
-                certaintyFor: (l) => _certainty(l.realtime, l.tripId),
-              ),
-              onTap: (i) => _select(list[i].best),
-            ),
+            _routeList(list, _hidden(label)),
           ],
       ],
     ];
+  }
+
+  /// Journeys listed normally in a section (live, predicted, scheduled).
+  List<RouteGroup> _shown(String kind) =>
+      routes.where((g) => !g.isWalk && g.hiddenBecause == null && _routeKind(g) == kind).toList();
+
+  /// Journeys of a section under "show more" (see checkStayingOn).
+  List<RouteGroup> _hidden(String? kind) => kind == null || kind == 'walk'
+      ? const []
+      : routes.where((g) => !g.isWalk && g.hiddenBecause != null && _routeKind(g) == kind).toList();
+
+  /// A section's journeys; those staying on a bus would beat end in one
+  /// expandable "N more journeys" item, each saying which line already
+  /// takes you there.
+  Widget _routeList(List<RouteGroup> list, List<RouteGroup> hidden) {
+    Widget row(RouteGroup g) => RouteGroupRow(
+          group: g,
+          colorFor: _colorFor,
+          certaintyFor: (l) => _certainty(l.realtime, l.tripId),
+        );
+    return M3EList.sliver(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      itemCount: list.length + (hidden.isEmpty ? 0 : 1),
+      itemBuilder: (context, i) {
+        if (i < list.length) return row(list[i]);
+        final cs = Theme.of(context).colorScheme;
+        return M3EListItem(
+          headline: context.l10n.moreJourneys(hidden.length),
+          leading: const Icon(Icons.unfold_more_rounded),
+          expanded: M3EExpandableExpanded.list(
+            M3EList(
+              embedded: true,
+              itemCount: hidden.length,
+              itemBuilder: (context, j) => Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+                  child: Row(children: [
+                    Icon(Icons.event_seat_rounded, size: 16, color: cs.onSurfaceVariant),
+                    const SizedBox(width: 6),
+                    Flexible(
+                      child: Text(
+                        context.l10n.hiddenJourneyReason(hidden[j].hiddenBecause!.line,
+                            hm(hidden[j].hiddenBecause!.arrival), hidden[j].hiddenBecause!.changesSaved),
+                        style: Theme.of(context).textTheme.labelMedium?.copyWith(color: cs.onSurfaceVariant),
+                      ),
+                    ),
+                  ]),
+                ),
+                row(hidden[j]),
+              ]),
+              onTap: (j) => _select(hidden[j].best),
+            ),
+          ),
+        );
+      },
+      onTap: (i) {
+        if (i < list.length) _select(list[i].best);
+      },
+    );
   }
 
   /// The line under a selected journey's header: how many of its rides

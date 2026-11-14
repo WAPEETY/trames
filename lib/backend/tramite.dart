@@ -18,7 +18,27 @@ class TramiteClient {
   TramiteClient({required this.baseUrl, http.Client? client}) : _client = client ?? http.Client();
 
   /// e.g. https://tramite.realac.ci
-  final String baseUrl;
+  String baseUrl;
+
+  /// Talk to another Tramite server from now on (settings): what it covers
+  /// is asked again.
+  void switchTo(String url) {
+    if (url == baseUrl) return;
+    baseUrl = url;
+    _prefixes = const [];
+    _coverageAt = null;
+    loadCoverage();
+  }
+
+  /// Whether [url] answers like a Tramite server.
+  Future<bool> checkServer(String url) async {
+    try {
+      final res = await _client.get(Uri.parse('$url/v1/sources'), headers: kHeaders).timeout(const Duration(seconds: 10));
+      return res.statusCode == 200 && res.body.trimLeft().startsWith('[');
+    } catch (_) {
+      return false;
+    }
+  }
   final http.Client _client;
 
   Uri uri(String path, [Map<String, dynamic>? query]) => Uri.parse('$baseUrl$path').replace(queryParameters: query);

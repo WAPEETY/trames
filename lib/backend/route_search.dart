@@ -33,12 +33,16 @@ class RankPolicy {
 
   final Duration changeFloor;
   final double changeShare;
-  final Duration changeCap;
+
+  /// Upper bound of the penalty; null: none.
+  final Duration? changeCap;
 
   /// max(floor, share × trip), capped, rounded up to a whole minute.
   Duration penalty(Duration trip) {
-    final raw = trip.inSeconds * changeShare;
-    final secs = raw.clamp(changeFloor.inSeconds.toDouble(), changeCap.inSeconds.toDouble());
+    var secs = trip.inSeconds * changeShare;
+    if (secs < changeFloor.inSeconds) secs = changeFloor.inSeconds.toDouble();
+    final cap = changeCap;
+    if (cap != null && secs > cap.inSeconds) secs = cap.inSeconds.toDouble();
     return Duration(minutes: (secs / 60).ceil());
   }
 
@@ -72,6 +76,10 @@ class RouteGroup {
 
   /// Walking the whole way.
   bool get isWalk => best.walkOnly;
+
+  /// Under "show more": staying on one of its buses takes you there about
+  /// as soon (see [Itinerary.hiddenBecause]).
+  StayOnReason? get hiddenBecause => best.hiddenBecause;
 }
 
 class RouteSearch {
@@ -83,6 +91,7 @@ class RouteSearch {
     this.policy = kWalkPolicy,
     this.rank = kRankPolicy,
     this.stayOn = kStayOnPolicy,
+    this.trips,
     DateTime Function()? clock,
   }) : _clock = clock ?? DateTime.now;
 
@@ -95,14 +104,18 @@ class RouteSearch {
   final WalkPolicy policy;
   final RankPolicy rank;
 
-  /// When getting off the vehicle you ride is worth it (on-board searches).
+  /// When getting off a vehicle you ride is worth it (rule 2, see
+  /// [checkStayingOn]).
   final StayOnPolicy stayOn;
+
+  /// Where runs go, for rule 2; without it nothing is put under "show more".
+  final TripDetails? trips;
   final DateTime Function() _clock;
 
-  /// Routes for someone riding [ride] now (needs an [OnBoardPlanner]): every
-  /// route starts on board. Staying on comes first, getting off only when
-  /// it clearly pays ([stayOn]). Throws [OnBoardTripOver] when the ride has
-  /// no stops left.
+  /// Journeys for someone riding [ride] now (needs an [OnBoardPlanner]):
+  /// every journey starts on board. Staying on comes first; getting off is
+  /// listed normally only when it clearly pays (rule 2, as for any ride of
+  /// any journey). Throws [OnBoardTripOver] when the ride has no stops left.
   Future<List<RouteGroup>> searchOnBoard(OnBoardRide ride, LatLng to, {String toName = ''}) async {
     final TripPlanner p = planner;
     if (p is! OnBoardPlanner) throw UnsupportedError('This planner cannot plan from a vehicle');
@@ -124,12 +137,11 @@ class RouteSearch {
     }));
     final stayIt = await stay;
     if (batches.every((b) => b.isEmpty) && stayIt == null && firstError != null) throw firstError!;
-    final all = [for (final it in [...batches.expand((b) => b), ?stayIt]) trimAlternatives(it)];
-    final walked = cache == null ? all : await applyWalkRules(all);
-    return group(preferStayingOn(walked, now: trip.now, policy: stayOn));
+    return _finish([...batches.expand((b) => b), ?stayIt], to, toName);
   }
 
-  Future<List<RouteGroup>> search(LatLng from, LatLng to) async {
+  /// Journeys from [from] to [to] ([toName] names the last walk).
+  Future<List<RouteGroup>> search(LatLng from, LatLng to, {String toName = ''}) async {
     Object? firstError;
     final batches = await Future.wait(profiles.map((p) async {
       try {
@@ -140,28 +152,69 @@ class RouteSearch {
       }
     }));
     if (batches.every((b) => b.isEmpty) && firstError != null) throw firstError!;
-    final all = [for (final it in batches.expand((b) => b)) trimAlternatives(it)];
-    return group(walks == null ? all : await applyWalkRules(all));
+    return _finish(batches.expand((b) => b).toList(), to, toName);
+  }
+
+  /// Rule 1 on the alternatives, then the walking rule, then rule 2 on the
+  /// journeys as they will be shown (buses replaced by a walk are not
+  /// judged), then grouping.
+  Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName) async {
+    final rides = [for (final it in raw) ...it.transitLegs];
+    var all = [for (final it in raw) trimAlternatives(it, rides: rides)];
+    final cache = walks, details = trips;
+    if (cache != null) all = await applyWalkRules(all);
+    if (cache != null && details != null) {
+      all = await checkStayingOn(
+        all,
+        to: to,
+        toName: toName,
+        runOf: details.trip,
+        walks: cache,
+        policy: stayOn,
+        maxWalk: policy.maxStayOnWalk,
+        walkSpeed: kWalkingSpeedKmh / 3.6,
+      );
+    }
+    return group(all);
   }
 
   /// Keeps only alternatives that board and get off near the planned ride's
   /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]) and that haven't
   /// left yet.
-  Itinerary trimAlternatives(Itinerary it) {
+  ///
+  /// Rule 1: right after a ride on line X, an alternative on X is pointless
+  /// when [rides] (every ride of every journey found) include a direct X
+  /// from that ride's boarding stop to this leg's destination: staying on
+  /// gets you there, so getting off to wait for the next X never helps.
+  /// Without such a ride (e.g. the first X ends here) it's a real option.
+  Itinerary trimAlternatives(Itinerary it, {Iterable<Leg> rides = const []}) {
     final max = policy.maxAlternativeStopDistanceMeters;
     final now = _clock();
     var changed = false;
+    String line(Leg l) => l.routeShortName ?? l.mode;
+    bool near(LatLng a, LatLng b) => distanceMeters(a, b) <= max;
+    Leg? previousRide(int i) {
+      for (var j = i - 1; j >= 0; j--) {
+        if (it.legs[j].transit) return it.legs[j];
+      }
+      return null;
+    }
+
     final legs = [
-      for (final l in it.legs)
+      for (final (i, l) in it.legs.indexed)
         if (l.alternatives.isEmpty)
           l
         else
           () {
+            final prev = previousRide(i);
+            final stayOnWorks = prev != null &&
+                rides.any((d) => line(d) == line(prev) && near(d.from, prev.from) && near(d.to, l.to));
             final keep = [
               for (final a in l.alternatives)
                 if (a.reachableFrom(now) &&
-                    distanceMeters(a.ride.from, l.from) <= max &&
-                    distanceMeters(a.ride.to, l.to) <= max)
+                    !(stayOnWorks && a.line == line(prev)) &&
+                    near(a.ride.from, l.from) &&
+                    near(a.ride.to, l.to))
                   a,
             ];
             if (keep.length == l.alternatives.length) return l;
@@ -169,17 +222,7 @@ class RouteSearch {
             return l.withAlternatives(keep);
           }(),
     ];
-    return changed
-        ? Itinerary(
-            start: it.start,
-            end: it.end,
-            legs: legs,
-            transfers: it.transfers,
-            base: it.base,
-            walkSlots: it.walkSlots,
-            rideChoices: it.rideChoices,
-          )
-        : it;
+    return changed ? it.withLegs(legs) : it;
   }
 
   /// Rule 1: replace rides by walking where it's pointless or slower to ride.
@@ -226,6 +269,7 @@ class RouteSearch {
           rideDuration: tv.slotRide(s).duration,
           rideArrival: tv.spanEnd(s),
           walkArrival: walkArrival,
+          walk: route.duration,
         )) {
           continue;
         }
@@ -252,7 +296,12 @@ class RouteSearch {
   }
 
   /// Dedupe identical trips, group by line sequence, rank and tag.
-  List<RouteGroup> group(Iterable<Itinerary> all) {
+  ///
+  /// [sectionOf] puts each journey in its list section (e.g. live or
+  /// scheduled, by how sure its buses' times are): a row only holds
+  /// journeys of one section, so every option you swipe to belongs where
+  /// the row is.
+  List<RouteGroup> group(Iterable<Itinerary> all, {String Function(Itinerary)? sectionOf}) {
     final now = _clock().subtract(const Duration(minutes: 1));
     final unique = <String, Itinerary>{};
     for (final it in all) {
@@ -263,20 +312,31 @@ class RouteSearch {
       final key = it.walkOnly
           ? 'walk'
           : '${it.signature}|${it.transitLegs.map((l) => l.tripId ?? l.start.toIso8601String()).join(',')}';
+      // The same journey shown and under "show more": keep the shown one.
       final prev = unique[key];
-      if (prev == null || _better(it, prev)) unique[key] = it;
+      final prevHidden = prev?.hiddenBecause != null, hidden = it.hiddenBecause != null;
+      if (prev == null || (prevHidden && !hidden) || (prevHidden == hidden && _better(it, prev))) unique[key] = it;
     }
 
+    // Journeys under "show more" form their own groups.
     final groups = <String, List<Itinerary>>{};
     for (final it in unique.values) {
-      (groups[it.signature] ??= []).add(it);
+      final section = sectionOf?.call(it) ?? '';
+      (groups['$section|${it.hiddenBecause == null ? '' : 'hidden:'}${it.signature}'] ??= []).add(it);
     }
     // Routes that differ only by which interchangeable line they take (60 ›
     // 19BUS and 60 › 3BUS, when the 3BUS is an alternative of the 19BUS) show
     // the same split pill: one route, its earliest departure first.
     final merged = <List<Itinerary>>[];
     for (final g in groups.values.map((v) => v..sort(_byArrival)).toList()..sort((a, b) => _byArrival(a.first, b.first))) {
-      final same = g.first.walkOnly ? null : merged.where((m) => _interchangeable(m.first, g.first)).firstOrNull;
+      final same = g.first.walkOnly
+          ? null
+          : merged
+              .where((m) =>
+                  (m.first.hiddenBecause == null) == (g.first.hiddenBecause == null) &&
+                  sectionOf?.call(m.first) == sectionOf?.call(g.first) &&
+                  _interchangeable(m.first, g.first))
+              .firstOrNull;
       if (same == null) {
         merged.add(g);
       } else {
@@ -290,16 +350,25 @@ class RouteSearch {
     ]..sort((a, b) => _byArrival(a.best, b.best));
     if (result.isEmpty) return result;
 
-    result.first.tags.add(RouteTag.fastest);
-    final transit = result.where((g) => !g.isWalk).toList();
+    // Tags describe the journeys listed normally.
+    final shown = result.where((g) => g.hiddenBecause == null).toList();
+    shown.firstOrNull?.tags.add(RouteTag.fastest);
+    final transit = shown.where((g) => !g.isWalk).toList();
     if (transit.isNotEmpty) {
-      RouteGroup minBy(int Function(RouteGroup) f) =>
-          transit.reduce((a, b) => f(b) < f(a) ? b : a); // ties keep the faster (earlier) group
+      // Every route that has the fewest changes (or the least walking) says
+      // so, when that's better than the fastest route: otherwise one route
+      // with one bus would go untagged while another with two had the tag.
       final fastestTransit = transit.first;
-      final fewest = minBy((g) => g.best.transfers);
-      if (fewest.best.transfers < fastestTransit.best.transfers) fewest.tags.add(RouteTag.fewestChanges);
-      final leastWalk = minBy((g) => g.best.walkMinutes);
-      if (leastWalk.best.walkMinutes < fastestTransit.best.walkMinutes) leastWalk.tags.add(RouteTag.leastWalking);
+      void tagMin(RouteTag tag, int Function(Itinerary) f) {
+        final least = transit.map((g) => f(g.best)).reduce((a, b) => a < b ? a : b);
+        if (least >= f(fastestTransit.best)) return;
+        for (final g in transit) {
+          if (f(g.best) == least) g.tags.add(tag);
+        }
+      }
+
+      tagMin(RouteTag.fewestChanges, (it) => it.transfers);
+      tagMin(RouteTag.leastWalking, (it) => it.walkMinutes);
     }
 
     // Order by arrival + the cost of changes (tags above stay on the
@@ -323,9 +392,9 @@ class RouteSearch {
         ..insert(0, walk);
     }
 
-    // On board: staying on first (only changes worth it are left, see
-    // preferStayingOn).
-    final stay = result.where((g) => staysOnBoard(g.best)).firstOrNull;
+    // On board: staying on first (changes not worth it are under "show
+    // more", see checkStayingOn).
+    final stay = result.where((g) => g.hiddenBecause == null && staysOnBoard(g.best)).firstOrNull;
     if (stay != null) {
       stay.tags.add(RouteTag.stayOnBoard);
       result

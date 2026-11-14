@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'backend.dart';
@@ -25,14 +23,16 @@ import 'backend.dart';
 ///    back into one ride), or not at all;
 ///  * staying on and changing both look like "no change" to it, so a change
 ///    one minute faster hides staying on: [stayOnBoard] builds that option
-///    itself, and [preferStayingOn] drops changes that don't clearly pay.
+///    itself, and [checkStayingOn] (the same rule as for any journey) puts
+///    changes that don't clearly pay under "show more".
 
 /// Time to get off and catch the next vehicle (on top of any walk).
 const kOnBoardTransferBuffer = Duration(minutes: 1);
 
 /// Staying on and then walking further than this isn't "the bus takes you
-/// there": it competes with the other routes like any of them.
-const kStayOnMaxWalk = Duration(minutes: 10);
+/// there" (tagged and listed first in on-board mode). The rule that hides
+/// journeys uses the walking preference instead ([WalkPolicy.maxStayOnWalk]).
+const kStayOnMaxWalk = Duration(minutes: 20);
 
 /// How far from the vehicle's stops other stops count as reachable on foot.
 const kOnBoardWalkMeters = 350.0;
@@ -41,11 +41,33 @@ const kOnBoardWalkMeters = 350.0;
 const _walkDetour = 1.3;
 
 /// The vehicle you ride, at [now]: where it is and the stops still ahead.
+///
+/// With [boardedAt] it's a ride you will board at that stop at [now] (a
+/// journey's ride, checked like the bus you're on): the stops ahead are
+/// those after it.
 class OnBoardTrip {
-  OnBoardTrip(this.ride, this.info, {required this.now}) {
+  OnBoardTrip(this.ride, this.info, {required this.now, String? boardedAt}) {
+    final at = boardedAt == null ? -1 : _boardingIndex(boardedAt);
+    if (at >= 0) {
+      remaining = [for (final s in info.stops.skip(at + 1)) if (s.time != null) s];
+      position = info.stops[at].position;
+      return;
+    }
     final first = info.stops.indexWhere((s) => s.time != null && !s.time!.isBefore(now));
     remaining = first < 0 ? const [] : [for (final s in info.stops.skip(first)) if (s.time != null) s];
     position = _whereNow(first);
+  }
+
+  /// The visit of [stopId] nearest [now] (a stop can be on a loop twice).
+  int _boardingIndex(String stopId) {
+    var best = -1;
+    for (var i = 0; i < info.stops.length; i++) {
+      final s = info.stops[i];
+      if (s.stopId != stopId) continue;
+      final d = s.time?.difference(now).abs();
+      if (best < 0 || (d != null && d < (info.stops[best].time?.difference(now).abs() ?? d))) best = i;
+    }
+    return best;
   }
 
   final OnBoardRide ride;
@@ -84,8 +106,9 @@ class OnBoardTrip {
       leg.transit &&
       (leg.backendTripId == ride.backendTripId || (leg.tripId != null && leg.tripId == ride.tripId));
 
-  /// The ride from here to [remaining]\[[k]\], getting off there.
-  Leg rideTo(int k) {
+  /// The ride from here to [remaining]\[[k]\], getting off there;
+  /// [onBoard] when it's the bus you're on now.
+  Leg rideTo(int k, {bool onBoard = true}) {
     final stop = remaining[k];
     final path = approachPath(info.points, position, stop.position);
     final points = path.length >= 2 ? path : [position, stop.position];
@@ -96,7 +119,7 @@ class OnBoardTrip {
     return Leg(
       mode: info.mode.isEmpty ? ride.mode : info.mode,
       transit: true,
-      onBoard: true,
+      onBoard: onBoard,
       start: now,
       end: stop.time!,
       fromName: remaining.first.name,
@@ -243,6 +266,8 @@ Future<Itinerary?> stayOnBoard(
   String toName = '',
   int candidates = 3,
   double maxWalkMeters = 1500,
+  Duration? maxWalk,
+  bool onBoard = true,
 }) async {
   final near = [
     for (var k = 0; k < trip.remaining.length; k++)
@@ -255,12 +280,12 @@ Future<Itinerary?> stayOnBoard(
   ({int k, WalkRoute walk, DateTime end})? best;
   for (final k in ks) {
     final walk = walks.lookup(trip.remaining[k].position, to);
-    if (walk == null) continue;
+    if (walk == null || (maxWalk != null && walk.duration > maxWalk)) continue;
     final end = trip.remaining[k].time!.add(walk.duration);
     if (best == null || end.isBefore(best.end)) best = (k: k, walk: walk, end: end);
   }
   if (best == null) return null;
-  final ride = trip.rideTo(best.k);
+  final ride = trip.rideTo(best.k, onBoard: onBoard);
   return Itinerary(
     start: trip.now,
     end: best.end,
@@ -307,20 +332,155 @@ bool staysOnBoard(Itinerary it) {
   return walk <= kStayOnMaxWalk;
 }
 
-/// Keeps staying on (the earliest-arriving way) and only the itineraries
-/// that beat it by [StayOnPolicy.threshold] per change. Unchanged when no
-/// itinerary stays on.
-List<Itinerary> preferStayingOn(List<Itinerary> all, {required DateTime now, StayOnPolicy policy = kStayOnPolicy}) {
-  Itinerary? stay;
-  for (final it in all.where(staysOnBoard)) {
-    if (stay == null || it.end.isBefore(stay.end)) stay = it;
+/// Rule 2 of the journey list: on any bus of a journey you sit on a
+/// vehicle (as when you're on a bus now), so getting off to change must
+/// clearly pay. Runs on journeys as they will be shown, after the walking
+/// rule.
+///
+/// For every bus R of a journey (run X), "stay on X to its stop nearest
+/// [to], then walk at most [maxWalk]" is worked out and added to the list.
+/// Then:
+///  * R shown in the journey and followed by N more buses: unless the
+///    journey arrives at least N × the threshold earlier ([policy], from
+///    "I prefer"), it goes under "show more" ([Itinerary.hiddenFor]);
+///  * R replaced by a walk (the walking rule's preferred choice, R left as
+///    a swipe option) and followed by more buses in the planner's journey:
+///    only the stay-on journey is added, nothing is judged (the journey
+///    shown doesn't change after R).
+///
+/// Runs come from [runOf] (cached by the caller), at most [maxRuns] per
+/// call: shown buses first, earliest-arriving journeys first. Buses whose
+/// run is unknown are left alone: never guess.
+Future<List<Itinerary>> checkStayingOn(
+  List<Itinerary> all, {
+  required LatLng to,
+  String toName = '',
+  required Future<TripInfo> Function(String backendTripId) runOf,
+  required WalkCache walks,
+  required StayOnPolicy policy,
+  required Duration maxWalk,
+  required double walkSpeed,
+  int maxRuns = 12,
+}) async {
+  // Buses replaced by a walk that the planner's journey ([Itinerary.base])
+  // changed from (more buses after them): staying on them instead is worth
+  // building. (Slots in [Itinerary.walkSlots] count its rides in order. A
+  // walked last bus is just the planner's journey: already a swipe option.)
+  List<(int, Leg)> walkedRides(Itinerary it) {
+    final base = it.base;
+    if (base == null || it.walkSlots.isEmpty) return const [];
+    final rides = [for (var i = 0; i < base.legs.length; i++) if (base.legs[i].transit) i];
+    return [
+      for (var slot = 0; slot < rides.length - 1; slot++)
+        if (it.walkSlots.contains(slot)) (rides[slot], base.legs[rides[slot]]),
+    ];
   }
-  if (stay == null) return all;
-  final bar = policy.threshold(stay.end.difference(now));
-  return [
-    for (final it in all)
-      if (staysOnBoard(it) || !it.end.isAfter(stay.end.subtract(bar * math.max(1, it.transfers)))) it,
-  ];
+
+  final sorted = [...all]..sort((a, b) => a.end.compareTo(b.end));
+  final runIds = <String>[];
+  void want(String? id) {
+    if (id != null && !runIds.contains(id) && runIds.length < maxRuns) runIds.add(id);
+  }
+
+  for (final it in sorted) {
+    final rides = it.transitLegs.toList();
+    for (var r = 0; r < rides.length - 1; r++) {
+      want(rides[r].backendTripId);
+    }
+  }
+  for (final it in sorted) {
+    for (final (_, ride) in walkedRides(it)) {
+      want(ride.backendTripId);
+    }
+  }
+  final runs = <String, TripInfo>{};
+  await Future.wait(runIds.map((id) async {
+    try {
+      final t = await runOf(id);
+      if (t.stops.isNotEmpty) runs[id] = t;
+    } catch (_) {}
+  }));
+
+  // Staying on from each boarding: shared by the journeys that board there.
+  final stays = <String, Future<Itinerary?>>{};
+  Future<Itinerary?> stayFrom(Leg ride) {
+    final id = ride.backendTripId!;
+    return stays['$id|${ride.fromStopId}|${ride.onBoard}'] ??= () async {
+      final info = runs[id]!;
+      final run = OnBoardRide(
+        backendTripId: id,
+        tripId: ride.tripId ?? id,
+        line: ride.routeShortName ?? ride.mode,
+        mode: ride.mode,
+        headsign: ride.headsign ?? '',
+      );
+      // The bus you're on now is where it is; any other bus starts at its
+      // boarding stop.
+      final trip = ride.onBoard
+          ? OnBoardTrip(run, info, now: ride.start)
+          : OnBoardTrip(run, info, now: ride.start, boardedAt: ride.fromStopId);
+      if (trip.remaining.isEmpty) return null;
+      try {
+        return await stayOnBoard(trip, to, walks,
+            toName: toName,
+            candidates: 2,
+            maxWalk: maxWalk,
+            maxWalkMeters: maxWalk.inSeconds * walkSpeed,
+            onBoard: ride.onBoard);
+      } catch (_) {
+        return null;
+      }
+    }();
+  }
+
+  final out = <Itinerary>[];
+  final added = <String>{};
+  void addStay(Itinerary stayJourney) {
+    final key = [for (final l in stayJourney.transitLegs) l.backendTripId ?? l.routeShortName].join('|');
+    if (added.add('$key@${stayJourney.end}')) out.add(stayJourney);
+  }
+
+  Itinerary stayJourney(Itinerary from, List<Leg> before, Itinerary stay) => Itinerary(
+        start: from.start,
+        end: stay.end,
+        legs: [...before, ...stay.legs],
+        transfers: [...before, ...stay.legs].where((l) => l.transit).length - 1,
+      );
+
+  for (final it in all) {
+    // Buses replaced by a walk: only the stay-on journey, from the
+    // planner's journey up to that bus.
+    for (final (i, ride) in walkedRides(it)) {
+      if (ride.backendTripId == null || !runs.containsKey(ride.backendTripId)) continue;
+      final stay = await stayFrom(ride);
+      if (stay != null) addStay(stayJourney(it.base!, it.base!.legs.sublist(0, i), stay));
+    }
+
+    // Buses shown: the stay-on journey, and the verdict.
+    final legs = it.legs;
+    var verdict = it;
+    final rideIdx = [for (var i = 0; i < legs.length; i++) if (legs[i].transit) i];
+    for (var r = 0; r < rideIdx.length - 1; r++) {
+      final ride = legs[rideIdx[r]];
+      if (ride.backendTripId == null || !runs.containsKey(ride.backendTripId)) continue;
+      final stay = await stayFrom(ride);
+      if (stay == null) continue;
+      final staying = stayJourney(it, legs.sublist(0, rideIdx[r]), stay);
+      addStay(staying);
+      final changesSaved = rideIdx.length - 1 - r;
+      final bar = policy.threshold(staying.duration) * changesSaved;
+      if (it.end.isAfter(stay.end.subtract(bar))) {
+        verdict = it.hiddenFor(StayOnReason(
+          line: ride.routeShortName ?? ride.mode,
+          arrival: stay.end,
+          changesSaved: changesSaved,
+        ));
+        break;
+      }
+    }
+    out.add(verdict);
+  }
+  return out;
 }
 
 /// The trip you're on has no stops left (it ended, or you passed them all).

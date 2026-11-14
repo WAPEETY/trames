@@ -312,6 +312,7 @@ class TripVariants {
       base: base,
       walkSlots: {for (var k = 0; k < _slots.length; k++) if (isWalk(k, _choice[k])) k},
       rideChoices: List.of(_choice),
+      hiddenBecause: base.hiddenBecause,
       walkOptions: {
         for (var j = 0; j < legs.length; j++)
           if (!legs[j].transit && slotOf[j] != null && _rideLines(slotOf[j]!).isNotEmpty) j: _rideLines(slotOf[j]!),

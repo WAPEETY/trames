@@ -93,7 +93,16 @@ class Itinerary {
     this.walkOptions = const {},
     this.rideChoices,
     this.missedConnection = false,
+    this.hiddenBecause,
   });
+
+  /// Shown only under "show more": staying on one of this journey's buses
+  /// gets you there about as soon with fewer changes (see checkStayingOn).
+  /// Null for journeys listed normally.
+  final StayOnReason? hiddenBecause;
+
+  /// Same journey, listed under "show more" for [reason].
+  Itinerary hiddenFor(StayOnReason reason) => _copy(hiddenBecause: reason);
 
   final DateTime start;
   final DateTime end;
@@ -120,16 +129,22 @@ class Itinerary {
   final bool missedConnection;
 
   /// Same itinerary, flagged as missing a connection.
-  Itinerary withMissedConnection() => Itinerary(
+  Itinerary withMissedConnection() => _copy(missedConnection: true);
+
+  /// Same journey with other [legs] (e.g. alternatives trimmed).
+  Itinerary withLegs(List<Leg> legs) => _copy(legs: legs);
+
+  Itinerary _copy({List<Leg>? legs, bool? missedConnection, StayOnReason? hiddenBecause}) => Itinerary(
         start: start,
         end: end,
-        legs: legs,
+        legs: legs ?? this.legs,
         transfers: transfers,
         base: base,
         walkSlots: walkSlots,
         walkOptions: walkOptions,
         rideChoices: rideChoices,
-        missedConnection: true,
+        missedConnection: missedConnection ?? this.missedConnection,
+        hiddenBecause: hiddenBecause ?? this.hiddenBecause,
       );
 
   bool get walkOnly => transitLegs.isEmpty;
@@ -147,6 +162,16 @@ class Itinerary {
 
   /// Which line sequence this is ("211 › MEB"); used to group departures of the same route.
   String get signature => transitLegs.map((l) => l.routeShortName ?? l.mode).join(' › ');
+}
+
+/// Why a journey is under "show more": staying on its bus [line] (instead
+/// of changing after it) arrives at [arrival], with [changesSaved] fewer
+/// changes.
+class StayOnReason {
+  const StayOnReason({required this.line, required this.arrival, required this.changesSaved});
+  final String line;
+  final DateTime arrival;
+  final int changesSaved;
 }
 
 /// Another connection that can replace a transit leg without breaking the

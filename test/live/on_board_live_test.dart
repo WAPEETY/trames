@@ -28,7 +28,7 @@ void main() {
       headsign: leg.headsign ?? '',
     );
     final now = leg.start.add(const Duration(minutes: 1));
-    final search = RouteSearch(b.planner, walks: WalkCache(b.walks!), clock: () => now);
+    final search = RouteSearch(b.planner, walks: WalkCache(b.walks!), trips: b.trips, clock: () => now);
 
     void show(String title, List<RouteGroup> groups) {
       // ignore: avoid_print
@@ -36,7 +36,7 @@ void main() {
       for (final g in groups) {
         final it = g.best;
         // ignore: avoid_print
-        print('${g.tags.map((t) => t.name).join(',').padRight(24)} arrive ${it.end.toIso8601String().substring(11, 16)} '
+        print('${g.hiddenBecause == null ? '' : 'HIDDEN '}${g.tags.map((t) => t.name).join(',').padRight(24)} arrive ${it.end.toIso8601String().substring(11, 16)} '
             'changes=${it.transfers} ${it.legs.map((l) => l.onBoard ? '64→${l.toName}' : l.transit ? '${l.routeShortName}' : 'walk${l.duration.inMinutes}').join(' › ')}');
       }
     }

@@ -96,7 +96,7 @@ void main() {
 
     test('staying on with a long walk is not protected as staying on', () {
       final t = _trip();
-      final long = Itinerary(start: _now, end: _m(40), transfers: 0, legs: [t.rideTo(4), _walk(20, 40)]);
+      final long = Itinerary(start: _now, end: _m(45), transfers: 0, legs: [t.rideTo(4), _walk(20, 45)]);
       expect(staysOnBoard(long), isFalse);
     });
 
@@ -144,8 +144,10 @@ void main() {
     });
   });
 
-  group('preferStayingOn', () {
+  group('staying on (rule 2, on board)', () {
     final trip = _trip();
+    // The destination: ~110 m from S5, where the bus is at +20 min.
+    final dest = LatLng(41.901, _pos(5).longitude);
     Itinerary stay(num end) => Itinerary(
         start: _now, end: _m(end), transfers: 0, legs: [trip.rideTo(4), _walk(20, end)]);
     Itinerary change(num end, int transfers) => Itinerary(
@@ -153,26 +155,47 @@ void main() {
         end: _m(end),
         transfers: transfers,
         legs: [trip.rideTo(1), for (var i = 0; i < transfers; i++) _bus('X$i', 'x$i', 6, end, from: 's2', to: 'z')]);
+    Future<List<Itinerary>> check(List<Itinerary> all) => checkStayingOn(
+          all,
+          to: dest,
+          runOf: (id) async => id == 'run64' ? _info() : throw Exception('unknown run'),
+          walks: WalkCache(_MeterWalks()),
+          policy: kStayOnPolicy,
+          maxWalk: const Duration(minutes: 12),
+          walkSpeed: 1.0,
+        );
 
-    test('a change must save max(5 min, 15%) per change', () {
-      final kept = preferStayingOn([
-        stay(30),
-        change(26, 1), // 4 min sooner: not worth getting off
-        change(24, 1), // 6 min sooner: worth it
-        change(21, 2), // 9 min for two changes (10 needed): no
-        change(19, 2), // 11 min: yes
-      ], now: _now);
-      expect(kept.map((it) => it.end), [_m(30), _m(24), _m(19)]);
+    test('a change must save max(5 min, 15%) per change, else it goes under "show more"', () async {
+      // Staying on: S5 at +20, then ~110 s on foot: about +21.8.
+      final out = await check([change(18, 1), change(15, 1), change(13, 2), change(11, 2)]);
+      final byEnd = {for (final it in out) if (it.transfers > 0) it.end: it.hiddenBecause?.line};
+      expect(byEnd, {_m(18): '64', _m(15): null, _m(13): '64', _m(11): null});
+    });
+
+    test('the stay-on journey is added, on board', () async {
+      final out = await check([change(18, 1)]);
+      final stayOn = out.where(staysOnBoard).single;
+      expect(stayOn.legs.first.onBoard, isTrue);
+      expect(stayOn.legs.first.toStopId, 's5');
+      expect(stayOn.hiddenBecause, isNull);
+    });
+
+    test('a run whose stops are unknown: nothing is hidden', () async {
+      final out = await checkStayingOn(
+        [change(18, 1)],
+        to: dest,
+        runOf: (_) async => throw Exception('offline'),
+        walks: WalkCache(_MeterWalks()),
+        policy: kStayOnPolicy,
+        maxWalk: const Duration(minutes: 12),
+        walkSpeed: 1.0,
+      );
+      expect(out.single.hiddenBecause, isNull);
     });
 
     test('the bar grows with the time left', () {
       expect(kStayOnPolicy.threshold(const Duration(minutes: 20)), const Duration(minutes: 5));
       expect(kStayOnPolicy.threshold(const Duration(minutes: 60)), const Duration(minutes: 9));
-    });
-
-    test('nothing staying on: everything kept', () {
-      final all = [change(26, 1), change(40, 2)];
-      expect(preferStayingOn(all, now: _now), all);
     });
 
     test('staying on is listed first, even when a change is faster', () {
@@ -209,4 +232,13 @@ class _NoPlanner implements TripPlanner {
 class _NoWalks implements WalkRouter {
   @override
   Future<WalkRoute?> walk(LatLng from, LatLng to) async => null;
+}
+
+/// Walks at 1 m/s along the straight line.
+class _MeterWalks implements WalkRouter {
+  @override
+  Future<WalkRoute?> walk(LatLng from, LatLng to) async {
+    final m = distanceMeters(from, to);
+    return WalkRoute(duration: Duration(seconds: m.round()), distanceMeters: m, points: [from, to]);
+  }
 }
