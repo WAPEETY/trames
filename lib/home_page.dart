@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:math' as math;
 
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -412,6 +413,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             locationSettings: const LocationSettings(timeLimit: Duration(seconds: 10)),
           );
           here = LatLng(pos.latitude, pos.longitude);
+          _showWebPuck(pos);
           _switchCityFor(here!);
           from = _myLocation(here!);
           map?.animateCamera(CameraUpdate.newLatLngZoom(here!, 15.5));
@@ -428,6 +430,21 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _refreshArea();
   }
 
+  Position? _lastFix;
+
+  /// On web the map draws our own fixes (see [MapLibreMap.locationSource]).
+  void _showWebPuck(Position pos) {
+    if (!kIsWeb) return;
+    _lastFix = pos;
+    map?.updateManualLocation(
+      ManualLocationUpdate(
+        target: LatLng(pos.latitude, pos.longitude),
+        horizontalAccuracy: pos.accuracy,
+        timestamp: pos.timestamp,
+      ),
+    );
+  }
+
   /// Keeps [here] current (and "My location" with it), for the center
   /// button and to notice you riding a bus.
   void _followLocation() {
@@ -438,6 +455,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           here = LatLng(pos.latitude, pos.longitude);
           if (from.isMyLocation) from = _myLocation(here!);
         });
+        _showWebPuck(pos);
         _checkBoarding();
         appSettings.observeWalking(
           WalkFix(
@@ -1672,6 +1690,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               initialCameraPosition: CameraPosition(target: here ?? _fallback.position, zoom: 15.5),
               onMapCreated: (c) {
                 map = c;
+                if (_lastFix case final f?) _showWebPuck(f); // a new map (e.g. dark mode)
                 styleReady = false;
                 _coneImages.clear(); // a new map (e.g. dark mode) has none
               },
@@ -1682,6 +1701,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               trackCameraPosition: true,
               onMapLongClick: _onMapLongPress,
               myLocationEnabled: locationGranted,
+              // On web the platform source is MapLibre's GeolocateControl, which
+              // brings its own button; feed it Geolocator's fixes instead.
+              locationSource: kIsWeb ? const ManualLocationSource() : const PlatformLocationSource(),
               compassEnabled: false,
               attributionEnabled: false, // replaced by MapCredit
             ),
@@ -1751,6 +1773,24 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                   onNo: () => _answerBoarding(false),
                   ),
                 ),
+              ),
+            // Web: the map is a DOM element under Flutter's canvas and would
+            // also get the pointer events meant for the sheet (dragging it
+            // panned the map). An empty element over the map, where the sheet
+            // is, takes them instead; they still reach Flutter.
+            if (kIsWeb)
+              ValueListenableBuilder<double>(
+                valueListenable: _sheetTop,
+                builder: (context, top, _) {
+                  final w = MediaQuery.sizeOf(context).width;
+                  return Positioned(
+                    left: (w - math.min(w, kSheetMaxWidth)) / 2,
+                    width: math.min(w, kSheetMaxWidth),
+                    bottom: 0,
+                    height: top,
+                    child: const _PointerShield(),
+                  );
+                },
               ),
             Positioned.fill(
               // Touching the sheet may drag it: follow its height meanwhile.
@@ -2166,4 +2206,13 @@ class _SuggestionHeader extends StatelessWidget {
         padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
         child: Text(title, style: emphasized(context).labelLarge.copyWith(color: Theme.of(context).colorScheme.primary)),
       );
+}
+
+/// Web only: an invisible DOM element that keeps pointer events from reaching
+/// the map element beneath it (Flutter still gets them).
+class _PointerShield extends StatelessWidget {
+  const _PointerShield();
+
+  @override
+  Widget build(BuildContext context) => HtmlElementView.fromTagName(tagName: 'div', isVisible: false);
 }
