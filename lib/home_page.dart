@@ -1730,12 +1730,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
                       scale: _centeredOnMe ? 0 : 1,
                       duration: const Duration(milliseconds: 250),
                       curve: Curves.easeOutBack,
-                      child: M3EIconButton(
-                        icon: const Icon(Icons.my_location_rounded),
-                        tooltip: context.l10n.myLocation,
-                        variant: M3EIconButtonVariant.tonal,
-                        size: M3EIconButtonSize.md,
-                        onPressed: _centeredOnMe ? null : _recenter,
+                      child: _PointerShield(
+                        child: M3EIconButton(
+                          icon: const Icon(Icons.my_location_rounded),
+                          tooltip: context.l10n.myLocation,
+                          variant: M3EIconButtonVariant.tonal,
+                          size: M3EIconButtonSize.md,
+                          onPressed: _centeredOnMe ? null : _recenter,
+                        ),
                       ),
                     ),
                 ]),
@@ -1746,12 +1748,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               SafeArea(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 8, 0, 0),
-                  child: M3EIconButton(
-                    icon: const Icon(Icons.person_rounded),
-                    tooltip: context.l10n.settingsTitle,
-                    variant: M3EIconButtonVariant.tonal,
-                    size: M3EIconButtonSize.md,
-                    onPressed: _openSettings,
+                  child: _PointerShield(
+                    child: M3EIconButton(
+                      icon: const Icon(Icons.person_rounded),
+                      tooltip: context.l10n.settingsTitle,
+                      variant: M3EIconButtonVariant.tonal,
+                      size: M3EIconButtonSize.md,
+                      onPressed: _openSettings,
+                    ),
                   ),
                 ),
               ),
@@ -2208,11 +2212,21 @@ class _SuggestionHeader extends StatelessWidget {
       );
 }
 
-/// Web only: an invisible DOM element that keeps pointer events from reaching
-/// the map element beneath it (Flutter still gets them).
+/// Web only: an invisible DOM element, behind [child] (or alone, filling its
+/// space), that keeps pointer events from reaching the map element beneath
+/// it; Flutter still gets them. Otherwise the map handles them too: a tap on
+/// a button over it stops the camera move the button just started.
 class _PointerShield extends StatelessWidget {
-  const _PointerShield();
+  const _PointerShield({this.child});
+
+  final Widget? child;
 
   @override
-  Widget build(BuildContext context) => HtmlElementView.fromTagName(tagName: 'div', isVisible: false);
+  Widget build(BuildContext context) {
+    if (!kIsWeb) return child ?? const SizedBox.shrink();
+    final shield = HtmlElementView.fromTagName(tagName: 'div', isVisible: false);
+    final c = child;
+    if (c == null) return shield;
+    return Stack(children: [Positioned.fill(child: shield), c]);
+  }
 }
