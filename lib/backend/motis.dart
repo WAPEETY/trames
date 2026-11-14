@@ -306,7 +306,6 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
       final modes = ((p['modes'] as List?) ?? const []).cast<String>();
       return Place(
         name: p['name'] as String? ?? code,
-        subtitle: 'Stop',
         position: _pos(p),
         kind: PlaceKind.stop,
         stopId: p['stopId'] as String?,
@@ -363,18 +362,14 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     ];
   }
 
-  static String _subtitle(Map<String, dynamic> r) {
-    final kind = switch (r['type']) {
-      'STOP' => 'Stop',
-      'ADDRESS' => 'Address',
-      _ => 'Place',
-    };
+  /// The result's areas ("Roma"); the app shows its kind before it.
+  static String? _subtitle(Map<String, dynamic> r) {
     final areas = (r['areas'] as List? ?? [])
         .where((a) => ((a['adminLevel'] as num?) ?? 0) >= 8)
         .map((a) => a['name'] as String)
         .toSet()
         .join(', ');
-    return areas.isEmpty ? kind : '$kind · $areas';
+    return areas.isEmpty ? null : areas;
   }
 
   // ---- StopBoards ----

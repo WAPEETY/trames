@@ -1,5 +1,6 @@
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
+import 'l10n.dart';
 
 /// A line pill split into segments by slanted "/" gaps: one segment per line
 /// that can do this leg ("211 / 111 / 450").
@@ -90,7 +91,7 @@ class SplitLinePill extends StatelessWidget {
     }
 
     return Semantics(
-      label: 'Line ${lines.join(' or ')}',
+      label: context.l10n.lineName(lines.join(' ${context.l10n.orWord} ')),
       child: CustomPaint(
         size: Size(width, _height),
         painter: _SplitPainter(segments, cuts, width),

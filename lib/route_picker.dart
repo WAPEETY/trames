@@ -5,6 +5,7 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
 import 'sheet_widgets.dart' show emphasized;
+import 'l10n.dart';
 
 /// One container for origin + destination.
 ///
@@ -92,11 +93,11 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                           _anchor(
                             controller: widget.fromSearch,
                             suggestions: widget.fromSuggestions,
-                            viewHint: 'Start from…',
+                            viewHint: context.l10n.startFrom,
                             icon: widget.fromIsMyLocation ? Icons.my_location_rounded : Icons.trip_origin_rounded,
                             iconColor: cs.primary,
                             text: widget.fromLabel,
-                            hint: 'From',
+                            hint: context.l10n.fromHint,
                           ),
                           Divider(height: 1, indent: 56, color: cs.outlineVariant),
                         ]),
@@ -106,15 +107,15 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                   _anchor(
                     controller: widget.toSearch,
                     suggestions: widget.toSuggestions,
-                    viewHint: 'Search a place, address or stop',
+                    viewHint: context.l10n.searchPlaceHint,
                     // Search glyph while it is a plain search pill, a pin once it is a route field.
                     icon: p > 0.5 || widget.toLabel != null ? Icons.place_rounded : Icons.search_rounded,
                     iconColor: p > 0.5 || widget.toLabel != null ? cs.error : cs.onSurfaceVariant,
                     text: widget.toLabel,
-                    hint: 'Where to?',
+                    hint: context.l10n.whereTo,
                     trailing: widget.toLabel != null
                         ? IconButton(
-                            tooltip: 'Clear destination',
+                            tooltip: context.l10n.clearDestination,
                             icon: const Icon(Icons.close_rounded),
                             onPressed: widget.onClear,
                           )
@@ -133,7 +134,7 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                           scale: 0.6 + 0.4 * p,
                           child: M3EIconButton(
                             icon: const Icon(Icons.swap_vert_rounded),
-                            tooltip: 'Swap origin and destination',
+                            tooltip: context.l10n.swapOriginDestination,
                             variant: M3EIconButtonVariant.standard,
                             onPressed: widget.toLabel == null ? null : widget.onSwap,
                           ),

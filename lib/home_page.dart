@@ -17,6 +17,7 @@ import 'backend/trip_variants.dart';
 import 'area_buses.dart';
 import 'attribution.dart';
 import 'favorites.dart';
+import 'l10n.dart';
 import 'line_view.dart';
 import 'live_buses.dart';
 import 'route_picker.dart';
@@ -64,14 +65,15 @@ class _HomePageState extends State<HomePage> {
   Place get _fallback => (city ?? kCities.first).fallbackCenter;
   final sheet = M3EBottomSheetController();
   final toSearch = M3ESearchController();
-  final fromSearch = M3ESearchController()..text = 'My location';
+  final fromSearch = M3ESearchController();
   MapLibreMapController? map;
   bool styleReady = false;
   bool locationGranted = false;
   M3EBottomSheetValue sheetValue = M3EBottomSheetValue.collapsed;
 
   LatLng? here;
-  Place from = Place(name: 'My location', position: kCities.first.fallbackCenter.position, isMyLocation: true);
+  // Named in didChangeDependencies, once the locale is known.
+  Place from = Place(name: '', position: kCities.first.fallbackCenter.position, isMyLocation: true);
   Place? to;
 
   // Departures for the visible map area (idle state).
@@ -270,6 +272,20 @@ class _HomePageState extends State<HomePage> {
     } catch (_) {}
   }
 
+  /// The "My location" origin at [p], named in the current language.
+  Place _myLocation(LatLng p) => Place(name: context.l10n.myLocation, position: p, isMyLocation: true);
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    // Name "My location" in the current language (also after a change).
+    if (from.isMyLocation && from.name != context.l10n.myLocation) {
+      final shown = fromSearch.text.isEmpty || fromSearch.text == from.name;
+      from = _myLocation(from.position);
+      if (shown) fromSearch.text = from.name;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
@@ -322,7 +338,7 @@ class _HomePageState extends State<HomePage> {
           );
           here = LatLng(pos.latitude, pos.longitude);
           _switchCityFor(here!);
-          from = Place(name: 'My location', position: here!, isMyLocation: true);
+          from = _myLocation(here!);
           map?.animateCamera(CameraUpdate.newLatLngZoom(here!, 15.5));
         }
       }
@@ -579,7 +595,7 @@ class _HomePageState extends State<HomePage> {
     final prefix = lineId == null ? tramite.prefixOf(tripId) : null;
     final id = lineId ?? (prefix == null ? null : TramiteClient.lineId(prefix, name));
     if (id == null) {
-      if (tripId == null) setState(() => state.error = 'Live buses aren\'t available for this line.');
+      if (tripId == null) setState(() => state.error = context.l10n.errorNoLiveBusesForLine);
       return;
     }
     // The line's buses, pushed: drawn, and one trip per direction for the
@@ -601,7 +617,7 @@ class _HomePageState extends State<HomePage> {
           if (first != null) {
             _loadLineTrip(first);
           } else {
-            setState(() => state.error = 'No bus of line $name is running right now.');
+            setState(() => state.error = context.l10n.errorNoBusRunning(name));
           }
         } else {
           setState(() {});
@@ -627,7 +643,7 @@ class _HomePageState extends State<HomePage> {
       _drawLine();
       _fitTo(t.points);
     } catch (e) {
-      if (line == state) setState(() => state.error = 'Could not load the line: $e');
+      if (line == state) setState(() => state.error = context.l10n.errorLoadLine('$e'));
     }
   }
 
@@ -1035,7 +1051,7 @@ class _HomePageState extends State<HomePage> {
   Future<void> _setOrigin(Place p) async {
     if (p.isMyLocation) {
       if (here == null) return;
-      p = Place(name: 'My location', position: here!, isMyLocation: true);
+      p = _myLocation(here!);
     }
     _deselect();
     setState(() => from = p);
@@ -1112,7 +1128,7 @@ class _HomePageState extends State<HomePage> {
     if (!kept) {
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(content: Text('Other changes reset: that connection would be missed')));
+        ..showSnackBar(SnackBar(content: Text(context.l10n.connectionResetSnack)));
     }
   }
 
@@ -1147,7 +1163,11 @@ class _HomePageState extends State<HomePage> {
           : Icon(p.kind == PlaceKind.address ? Icons.home_outlined : Icons.place_outlined, color: cs.onSurfaceVariant),
       title: Text(p.name),
       subtitle: Text(
-        [if (isStop && p.stopId != null) stopCodeFromId(p.stopId!), ?p.subtitle].join(' · '),
+        [
+          if (isStop && p.stopId != null) stopCodeFromId(p.stopId!),
+          placeKindLabel(context.l10n, p.kind),
+          ?p.subtitle,
+        ].join(' · '),
         maxLines: 1,
         overflow: TextOverflow.ellipsis,
       ),
@@ -1155,7 +1175,7 @@ class _HomePageState extends State<HomePage> {
         if (isStop && p.stopId != null)
           M3EIconButton(
             icon: const Icon(Icons.departure_board_rounded),
-            tooltip: 'Departures from this stop',
+            tooltip: context.l10n.departuresFromThisStop,
             variant: M3EIconButtonVariant.tonal,
             onPressed: () {
               c.closeView(isFrom ? from.name : (to?.name ?? ''));
@@ -1168,7 +1188,7 @@ class _HomePageState extends State<HomePage> {
             final fav = favorites.isFavorite(p);
             return M3EIconButton(
               icon: Icon(fav ? Icons.star_rounded : Icons.star_outline_rounded, color: fav ? cs.primary : null),
-              tooltip: fav ? 'Remove from favourites' : 'Add to favourites',
+              tooltip: fav ? context.l10n.removeFavourite : context.l10n.addFavourite,
               variant: M3EIconButtonVariant.standard,
               onPressed: () {
                 HapticFeedback.selectionClick();
@@ -1219,21 +1239,25 @@ class _HomePageState extends State<HomePage> {
   Future<Iterable<Widget>> _suggestions(M3ESearchController c, {required bool isFrom}) async {
     final q = c.text.trim();
     final cs = Theme.of(context).colorScheme;
+    final l = context.l10n; // also after the awaits below
     final items = <Widget>[
       if (isFrom && here != null)
         ListTile(
           leading: Icon(Icons.my_location_rounded, color: cs.primary),
-          title: const Text('My location'),
+          title: Text(context.l10n.myLocation),
           onTap: () {
-            c.closeView('My location');
-            _setOrigin(Place(name: 'My location', position: here ?? _fallback.position, isMyLocation: true));
+            c.closeView(context.l10n.myLocation);
+            _setOrigin(_myLocation(here ?? _fallback.position));
           },
         ),
     ];
     // Nothing typed yet (empty, or still the field's current value):
     // favourites, as Stops and Destinations.
-    if (q.isEmpty || q == 'My location' || q == to?.name || (isFrom && q == from.name)) {
-      for (final (title, list) in [('Stops', favorites.stops), ('Destinations', favorites.destinations)]) {
+    if (q.isEmpty || q == context.l10n.myLocation || q == to?.name || (isFrom && q == from.name)) {
+      for (final (title, list) in [
+        (context.l10n.favouriteStops, favorites.stops),
+        (context.l10n.favouriteDestinations, favorites.destinations),
+      ]) {
         if (list.isEmpty) continue;
         items.add(_SuggestionHeader(title));
         items.addAll(list.map((p) => _placeTile(c, p, isFrom: isFrom)));
@@ -1259,8 +1283,8 @@ class _HomePageState extends State<HomePage> {
         final color = buses.first.color;
         items.add(ListTile(
           leading: LinePill(line: name, mode: 'BUS', color: color == null ? cs.primary : hexColor(color)),
-          title: Text('Line $name'),
-          subtitle: Text(buses.length == 1 ? '1 bus live' : '${buses.length} buses live'),
+          title: Text(l.lineName(name)),
+          subtitle: Text(l.busesLive(buses.length)),
           onTap: () {
             c.closeView('');
             _openLine(name: name, mode: 'BUS', lineId: id);
@@ -1292,7 +1316,7 @@ class _HomePageState extends State<HomePage> {
             isFrom: isFrom,
           )));
     } catch (e) {
-      items.add(ListTile(title: Text('Search failed: $e')));
+      items.add(ListTile(title: Text(l.searchFailed('$e'))));
     }
     return items;
   }
@@ -1360,7 +1384,7 @@ class _HomePageState extends State<HomePage> {
               // Keeps controller.cameraPosition (centre, zoom) current; the
               // area logic reads it after every move.
               trackCameraPosition: true,
-              onMapLongClick: (_, ll) => _setDestination(Place(name: 'Dropped pin', position: ll)),
+              onMapLongClick: (_, ll) => _setDestination(Place(name: context.l10n.droppedPin, position: ll)),
               myLocationEnabled: locationGranted,
               compassEnabled: false,
               attributionEnabled: false, // replaced by MapCredit
@@ -1374,7 +1398,7 @@ class _HomePageState extends State<HomePage> {
                   if (here != null)
                     M3EIconButton(
                       icon: const Icon(Icons.my_location_rounded),
-                      tooltip: 'My location',
+                      tooltip: context.l10n.myLocation,
                       variant: M3EIconButtonVariant.tonal,
                       size: M3EIconButtonSize.md,
                       onPressed: _recenter,
@@ -1453,12 +1477,12 @@ class _HomePageState extends State<HomePage> {
       SliverToBoxAdapter(
         child: SheetSectionHeader(
           filterStop != null
-              ? 'Departures from'
+              ? context.l10n.departuresFrom
               : areaMode
-                  ? 'Departures in this area'
+                  ? context.l10n.departuresInArea
                   : here == null
-                      ? 'Departures near Termini'
-                      : 'Departures near you',
+                      ? context.l10n.departuresNearTermini
+                      : context.l10n.departuresNearYou,
           trailing: nearbyLoading && nearby.isNotEmpty
               ? const SizedBox(width: 24, height: 24, child: M3ELoadingIndicator(size: 24))
               : null,
@@ -1498,7 +1522,7 @@ class _HomePageState extends State<HomePage> {
                       fav ? Icons.star_rounded : Icons.star_outline_rounded,
                       color: fav ? Theme.of(context).colorScheme.primary : null,
                     ),
-                    tooltip: fav ? 'Remove from favourites' : 'Add to favourites',
+                    tooltip: fav ? context.l10n.removeFavourite : context.l10n.addFavourite,
                     variant: M3EIconButtonVariant.standard,
                     onPressed: () {
                       HapticFeedback.selectionClick();
@@ -1512,16 +1536,16 @@ class _HomePageState extends State<HomePage> {
         ),
       if (error != null) _errorBox(error!),
       if (nearbyLoading && nearby.isEmpty)
-        SliverToBoxAdapter(child: SheetLoading(label: filterStop != null ? 'Loading departures' : 'Finding stops'))
+        SliverToBoxAdapter(child: SheetLoading(label: filterStop != null ? context.l10n.loadingDepartures : context.l10n.findingStops))
       else if (nearby.isEmpty)
         SliverToBoxAdapter(
           child: Padding(
             padding: const EdgeInsets.all(24),
             child: Text(filterStop != null
-                ? 'No departures from this stop in the next hour.'
+                ? context.l10n.noDeparturesFromStop
                 : nearbyStops.isEmpty
-                    ? 'No stops in this area.'
-                    : 'No departures in the next hour here.'),
+                    ? context.l10n.noStopsInArea
+                    : context.l10n.noDeparturesHere),
           ),
         )
       else ...[
@@ -1562,12 +1586,12 @@ class _HomePageState extends State<HomePage> {
     return [
       SliverToBoxAdapter(
         child: SheetSectionHeader(
-          routes.length > 1 ? '${routes.length} routes · by arrival' : 'Routes · by arrival',
+          context.l10n.routesByArrival(routes.length),
           trailing: planning && routes.isNotEmpty
               ? const SizedBox(width: 24, height: 24, child: M3ELoadingIndicator(size: 24))
               : M3EIconButton(
                   icon: const Icon(Icons.refresh_rounded),
-                  tooltip: 'Refresh',
+                  tooltip: context.l10n.refresh,
                   variant: M3EIconButtonVariant.standard,
                   onPressed: planning ? null : () => _plan(),
                 ),
@@ -1575,7 +1599,7 @@ class _HomePageState extends State<HomePage> {
       ),
       if (error != null) _errorBox(error!),
       if (planning && routes.isEmpty)
-        const SliverToBoxAdapter(child: SheetLoading(label: 'Comparing routes with live times'))
+        SliverToBoxAdapter(child: SheetLoading(label: context.l10n.comparingRoutes))
       else ...[
         // Walking suggested ("Faster on foot") first, then live, then
         // timetable-only, then walking when it isn't competitive; each list
@@ -1611,11 +1635,12 @@ class _HomePageState extends State<HomePage> {
   /// The line under a selected journey's header: how many of its rides
   /// have their bus on the map.
   String _tripStatus(Itinerary it, int? feedAge) {
-    if (it.transitLegs.isEmpty) return 'Walking only';
-    final covered = it.transitLegs.where((l) => tramite.covers(l.backendTripId)).length;
-    if (covered == 0) return 'No live bus positions for this trip';
-    if (!live.connected.value) return 'Live positions unavailable';
-    return 'Tracking ${tracker.buses.length} of $covered vehicles${feedAge != null ? ' · positions ${feedAge}s old' : ''}';
+    final l = context.l10n;
+    if (it.transitLegs.isEmpty) return l.tripWalkingOnly;
+    final covered = it.transitLegs.where((leg) => tramite.covers(leg.backendTripId)).length;
+    if (covered == 0) return l.tripNoLivePositions;
+    if (!live.connected.value) return l.tripLivePositionsUnavailable;
+    return [l.tripTracking(tracker.buses.length, covered), if (feedAge != null) l.tripPositionsAge(feedAge)].join(' · ');
   }
 
   List<Widget> _tripSlivers(Itinerary it) {
@@ -1629,7 +1654,7 @@ class _HomePageState extends State<HomePage> {
           child: Row(children: [
             M3EIconButton(
               icon: const Icon(Icons.arrow_back_rounded),
-              tooltip: 'Back to routes',
+              tooltip: context.l10n.backToRoutes,
               variant: M3EIconButtonVariant.standard,
               onPressed: _deselect,
             ),
@@ -1637,7 +1662,7 @@ class _HomePageState extends State<HomePage> {
             Expanded(
               child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
                 Semantics(
-                  label: 'from ${hm(it.start)} to ${hm(it.end)}',
+                  label: context.l10n.fromToSemantics(hm(it.start), hm(it.end)),
                   excludeSemantics: true,
                   child: Row(children: [
                     Text(hm(it.start), style: emphasized(context).headlineSmall.copyWith(color: cs.onSurface)),
@@ -1649,8 +1674,7 @@ class _HomePageState extends State<HomePage> {
                   ]),
                 ),
                 Text(
-                  '${it.duration.inMinutes} min · ${it.transfers} transfer${it.transfers == 1 ? '' : 's'}'
-                  ' · to ${to?.name ?? ''}',
+                  context.l10n.tripSummary(it.duration.inMinutes, it.transfers, to?.name ?? ''),
                   overflow: TextOverflow.ellipsis,
                   style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
                 ),
@@ -1693,7 +1717,7 @@ class _HomePageState extends State<HomePage> {
             labels: [
               for (var k = 0; k < v.variantCount(slot); k++)
                 v.isWalk(slot, k)
-                    ? 'walk ${v.walkDurationOf(slot).inMinutes} min'
+                    ? context.l10n.swipeWalk(v.walkDurationOf(slot).inMinutes)
                     : '${v.rideOf(slot, k).routeShortName ?? v.rideOf(slot, k).mode} ${hm(v.rideOf(slot, k).start)}',
             ],
             onChanged: (k) => _swapRide(slot, k),

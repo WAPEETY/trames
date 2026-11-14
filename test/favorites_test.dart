@@ -14,7 +14,7 @@ void main() {
     kind: PlaceKind.stop,
     stopId: 'it-Lazio-Rome_71502',
   );
-  const colosseo = Place(name: 'Colosseo', subtitle: 'Place · Roma', position: LatLng(41.8902, 12.4922));
+  const colosseo = Place(name: 'Colosseo', subtitle: 'Roma', position: LatLng(41.8902, 12.4922));
 
   test('toggle, split into stops and destinations, survive a restart', () async {
     final store = FavoritesStore();

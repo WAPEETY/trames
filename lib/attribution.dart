@@ -1,5 +1,6 @@
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 import 'package:url_launcher/url_launcher.dart';
+import 'l10n.dart';
 
 /// Small "© OpenStreetMap" credit that sits on the map, just above the sheet.
 /// Required by the ODbL (OSM) and OpenFreeMap/OpenMapTiles terms; tapping it
@@ -34,13 +35,13 @@ class MapCredit extends StatelessWidget {
   }
 }
 
-const _credits = [
-  ('OpenStreetMap contributors', 'Map data, ODbL', 'https://www.openstreetmap.org/copyright'),
-  ('OpenMapTiles', 'Vector tile schema', 'https://www.openmaptiles.org/'),
-  ('OpenFreeMap', 'Map tiles and style', 'https://openfreemap.org/'),
-  ('Roma Mobilità', 'Transit timetable and live data', 'https://romamobilita.it/'),
-  ('opentransit', 'Trip planning API', 'https://opentransit.tech/'),
-];
+List<(String, String, String)> _credits(AppLocalizations l) => [
+      (l.creditOsmName, l.creditOsm, 'https://www.openstreetmap.org/copyright'),
+      ('OpenMapTiles', l.creditOpenMapTiles, 'https://www.openmaptiles.org/'),
+      ('OpenFreeMap', l.creditOpenFreeMap, 'https://openfreemap.org/'),
+      ('Roma Mobilità', l.creditRomaMobilita, 'https://romamobilita.it/'),
+      ('opentransit', l.creditOpentransit, 'https://opentransit.tech/'),
+    ];
 
 void showAttributionSheet(BuildContext context) {
   showModalBottomSheet<void>(
@@ -53,9 +54,9 @@ void showAttributionSheet(BuildContext context) {
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
-            child: Text('Data & credits', style: Theme.of(context).textTheme.titleLarge),
+            child: Text(context.l10n.creditsTitle, style: Theme.of(context).textTheme.titleLarge),
           ),
-          for (final (name, what, url) in _credits)
+          for (final (name, what, url) in _credits(context.l10n))
             ListTile(
               title: Text(name),
               subtitle: Text(what),

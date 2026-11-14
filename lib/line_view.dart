@@ -2,6 +2,7 @@ import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
 import 'backend/backend.dart';
+import 'l10n.dart';
 import 'sheet_widgets.dart';
 
 /// What the line view shows: one line, one of its trips (a direction) with
@@ -48,7 +49,7 @@ List<Widget> lineSlivers(
         child: Row(children: [
           M3EIconButton(
             icon: const Icon(Icons.arrow_back_rounded),
-            tooltip: 'Back',
+            tooltip: context.l10n.back,
             variant: M3EIconButtonVariant.standard,
             onPressed: onBack,
           ),
@@ -75,8 +76,8 @@ List<Widget> lineSlivers(
                 ],
                 Text(
                   [
-                    if (liveBuses != null) liveBuses == 1 ? '1 bus live' : '$liveBuses buses live',
-                    if (trip != null) '${trip.stops.length} stops',
+                    if (liveBuses != null) context.l10n.busesLive(liveBuses),
+                    if (trip != null) context.l10n.stopsCount(trip.stops.length),
                   ].join(' · '),
                   style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant),
                 ),
@@ -86,7 +87,7 @@ List<Widget> lineSlivers(
           if (onSwitchDirection != null)
             M3EIconButton(
               icon: const Icon(Icons.swap_horiz_rounded),
-              tooltip: 'Other direction',
+              tooltip: context.l10n.otherDirection,
               variant: M3EIconButtonVariant.tonal,
               onPressed: onSwitchDirection,
             ),
@@ -101,7 +102,7 @@ List<Widget> lineSlivers(
         ),
       )
     else if (trip == null)
-      const SliverToBoxAdapter(child: SheetLoading(label: 'Loading the line'))
+      SliverToBoxAdapter(child: SheetLoading(label: context.l10n.loadingLine))
     else
       M3EList.sliver(
         margin: const EdgeInsets.symmetric(horizontal: 16),

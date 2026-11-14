@@ -1,8 +1,10 @@
 import 'package:dynamic_color/dynamic_color.dart';
+import 'package:flutter_localizations/flutter_localizations.dart' show GlobalWidgetsLocalizations;
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
 import 'home_page.dart';
+import 'l10n.dart';
 
 /// Fallback seed when the device has no wallpaper colors (Material You).
 const kSeed = Color(0xFFD81B60);
@@ -28,7 +30,13 @@ class TransitApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return DynamicColorBuilder(
       builder: (light, dark) => MaterialApp(
-        title: 'Trames',
+        onGenerateTitle: (context) => context.l10n.appTitle,
+        localizationsDelegates: const [
+          AppLocalizations.delegate,
+          GlobalMaterialLocalizations.delegate,
+          GlobalWidgetsLocalizations.delegate,
+        ],
+        supportedLocales: AppLocalizations.supportedLocales,
         debugShowCheckedModeBanner: false,
         theme: _theme(light, Brightness.light),
         darkTheme: _theme(dark, Brightness.dark),

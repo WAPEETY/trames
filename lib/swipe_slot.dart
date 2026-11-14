@@ -1,6 +1,7 @@
 import 'package:flutter/services.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
+import 'l10n.dart';
 
 /// Horizontal swipe between variants of one leg (e.g. 88 / 3 / 90).
 ///
@@ -90,7 +91,7 @@ class _SwipeSlotState extends State<SwipeSlot> {
           child: Row(children: [
             _ArrowButton(
               icon: Icons.chevron_left_rounded,
-              tooltip: hasPrev ? 'Previous: ${widget.labels[widget.index - 1]}' : null,
+              tooltip: hasPrev ? context.l10n.swipePrevious(widget.labels[widget.index - 1]) : null,
               enabled: hasPrev,
               onTap: () => _go(-1),
             ),
@@ -112,7 +113,7 @@ class _SwipeSlotState extends State<SwipeSlot> {
             ),
             _ArrowButton(
               icon: Icons.chevron_right_rounded,
-              tooltip: hasNext ? 'Next: ${widget.labels[widget.index + 1]}' : null,
+              tooltip: hasNext ? context.l10n.swipeNext(widget.labels[widget.index + 1]) : null,
               enabled: hasNext,
               onTap: () => _go(1),
             ),

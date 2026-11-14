@@ -64,10 +64,17 @@ class FavoritesStore extends ChangeNotifier {
 
   static Place _fromJson(Map<String, dynamic> j) => Place(
         name: j['name'] as String,
-        subtitle: j['subtitle'] as String?,
+        subtitle: _legacySubtitle(j['subtitle'] as String?),
         position: LatLng((j['lat'] as num).toDouble(), (j['lon'] as num).toDouble()),
         kind: PlaceKind.values.firstWhere((k) => k.name == j['kind'], orElse: () => PlaceKind.place),
         stopId: j['stopId'] as String?,
         station: j['station'] as bool? ?? false,
       );
+
+  /// Older saves kept the (English) kind in the subtitle ("Place · Roma");
+  /// the kind is now shown, translated, from [Place.kind].
+  static String? _legacySubtitle(String? s) {
+    final rest = s?.replaceFirst(RegExp(r'^(Stop|Address|Place)( · )?'), '');
+    return rest == null || rest.isEmpty ? null : rest;
+  }
 }

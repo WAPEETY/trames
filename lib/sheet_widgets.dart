@@ -3,6 +3,7 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 
 import 'backend/backend.dart';
 import 'backend/route_search.dart';
+import 'l10n.dart';
 import 'live_buses.dart';
 import 'split_line_pill.dart';
 
@@ -12,10 +13,18 @@ String hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toStri
 
 int minutesUntil(DateTime t) => (t.difference(DateTime.now()).inSeconds / 60).round();
 
-String inMinutes(DateTime t) {
+/// "now" / "in 5 min".
+String inMinutes(AppLocalizations l, DateTime t) {
   final m = minutesUntil(t);
-  return m <= 0 ? 'now' : 'in $m min';
+  return m <= 0 ? l.now : l.inMinutes(m);
 }
+
+/// "Stop" / "Address" / "Place", shown before a search result's area.
+String placeKindLabel(AppLocalizations l, PlaceKind k) => switch (k) {
+      PlaceKind.stop => l.placeKindStop,
+      PlaceKind.address => l.placeKindAddress,
+      PlaceKind.place => l.placeKindPlace,
+    };
 
 IconData modeIcon(String mode) => switch (mode) {
       'SUBWAY' => Icons.subway_rounded,
@@ -74,7 +83,7 @@ class RouteSectionLabel extends StatelessWidget {
             size: 18,
             color: color),
         const SizedBox(width: 6),
-        Text(onFoot ? 'On foot' : (live ? 'Live' : 'Scheduled'),
+        Text(onFoot ? context.l10n.routeSectionOnFoot : (live ? context.l10n.routeSectionLive : context.l10n.routeSectionScheduled),
             style: emphasized(context).labelLarge.copyWith(color: color)),
         const SizedBox(width: 6),
         Text('· $count', style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onSurfaceVariant)),
@@ -141,14 +150,14 @@ class Countdown extends StatelessWidget {
     // would suggest a precision the timetable doesn't have).
     if (certainty == Certainty.scheduled) {
       return Semantics(
-        label: 'at ${hm(departure.time)}, scheduled',
+        label: context.l10n.atTimeScheduled(hm(departure.time)),
         excludeSemantics: true,
         child: Text(hm(departure.time),
             style: emphasized(context).headlineSmall.copyWith(color: certaintyColor(context, certainty), height: 1)),
       );
     }
     return Semantics(
-      label: '${m <= 0 ? 'now' : 'in $m minutes'}, ${describeCertainty(certainty)}',
+      label: '${m <= 0 ? context.l10n.now : context.l10n.inMinutesLong(m)}, ${describeCertainty(context.l10n, certainty)}',
       excludeSemantics: true,
       child: LiveMinutes(
         minutes: m,
@@ -163,10 +172,14 @@ class Countdown extends StatelessWidget {
 /// on the way / not started yet) sits to the left, sized to the number and
 /// centered on it.
 class LiveMinutes extends StatelessWidget {
-  const LiveMinutes({super.key, required this.minutes, required this.certainty, required this.style});
+  const LiveMinutes(
+      {super.key, required this.minutes, required this.certainty, required this.style, this.showIn = false});
   final int minutes;
   final Certainty certainty;
   final TextStyle style;
+
+  /// "in" above the number ("in / 10 / min"), so it reads as a wait.
+  final bool showIn;
 
   @override
   Widget build(BuildContext context) {
@@ -174,15 +187,17 @@ class LiveMinutes extends StatelessWidget {
     final icon = certaintyIcon(certainty);
     final numberStyle = style.copyWith(color: color, height: 1);
     final iconSize = (numberStyle.fontSize ?? 32) * 0.6;
+    final labelStyle = Theme.of(context).textTheme.labelMedium?.copyWith(color: color);
     return Column(crossAxisAlignment: CrossAxisAlignment.end, mainAxisSize: MainAxisSize.min, children: [
+      if (showIn && minutes > 0) Text(context.l10n.waitIn, style: labelStyle),
       Row(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.center, children: [
         if (icon != null) ...[
           Icon(icon, size: iconSize, color: color),
           const SizedBox(width: 4),
         ],
-        Text(minutes <= 0 ? 'now' : '$minutes', style: numberStyle),
+        Text(minutes <= 0 ? context.l10n.now : '$minutes', style: numberStyle),
       ]),
-      if (minutes > 0) Text('min', style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color)),
+      if (minutes > 0) Text(context.l10n.min, style: labelStyle),
     ]);
   }
 }
@@ -230,7 +245,7 @@ class NearbyDepartureRow extends StatelessWidget {
             if (showStop) ...[
               const SizedBox(height: 2),
               Text(
-                '${_title(row.stop.name)} · ${row.stop.distanceMeters} m${later.isEmpty ? '' : ' · then $later'}',
+                '${_title(row.stop.name)} · ${row.stop.distanceMeters} m${later.isEmpty ? '' : ' · ${context.l10n.thenLater(later)}'}',
                 overflow: TextOverflow.ellipsis,
                 style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
               ),
@@ -303,12 +318,12 @@ IconData? certaintyIcon(Certainty c) => switch (c) {
     };
 
 /// For screen readers.
-String describeCertainty(Certainty c) => switch (c) {
-      Certainty.scheduled => 'scheduled',
-      Certainty.estimated => 'estimated by the app, bus coming back late',
-      Certainty.returning => 'scheduled, a bus is coming back in time',
-      Certainty.waiting => 'live, bus not departed yet',
-      Certainty.moving => 'live, bus on its way',
+String describeCertainty(AppLocalizations l, Certainty c) => switch (c) {
+      Certainty.scheduled => l.certaintyScheduled,
+      Certainty.estimated => l.certaintyEstimated,
+      Certainty.returning => l.certaintyReturning,
+      Certainty.waiting => l.certaintyWaiting,
+      Certainty.moving => l.certaintyMoving,
     };
 
 /// One itinerary in the route list.
@@ -384,7 +399,7 @@ class ItineraryRow extends StatelessWidget {
       child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(legs.isEmpty ? 'Walk' : 'Leave ${inMinutes(it.start)}',
+            Text(legs.isEmpty ? context.l10n.itineraryWalk : context.l10n.itineraryLeave(inMinutes(context.l10n, it.start)),
                 style: emphasized(context).titleMedium.copyWith(color: cs.onSurface)),
             const SizedBox(height: 2),
             times,
@@ -394,7 +409,7 @@ class ItineraryRow extends StatelessWidget {
                 Icon(certaintyIcon(Certainty.estimated), size: 14, color: certaintyColor(context, Certainty.estimated)),
                 const SizedBox(width: 4),
                 Flexible(
-                  child: Text('A bus runs late: likely misses a connection',
+                  child: Text(context.l10n.missedConnectionWarning,
                       style: tt.labelMedium?.copyWith(color: certaintyColor(context, Certainty.estimated))),
                 ),
               ]),
@@ -434,7 +449,7 @@ class ItineraryRow extends StatelessWidget {
         ),
         const SizedBox(width: 16),
         Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.end, children: [
-          Text('arrive', style: tt.labelMedium?.copyWith(color: arrColor)),
+          Text(context.l10n.arrive, style: tt.labelMedium?.copyWith(color: arrColor)),
           Text(
             hm(it.end),
             style: emphasized(context).displaySmall.copyWith(color: allLive ? arrColor : cs.onSurface, height: 1.05),
@@ -457,6 +472,7 @@ class WaitIndicator extends StatelessWidget {
         minutes: minutes,
         certainty: certainty,
         style: emphasized(context).headlineMedium,
+        showIn: true,
       );
 }
 
@@ -489,7 +505,7 @@ class LegRow extends StatelessWidget {
           Icon(Icons.directions_walk_rounded, color: cs.onSurfaceVariant),
           const SizedBox(width: 12),
           Expanded(
-            child: Text('Walk ${leg.distanceMeters.round()} m · $mins min\nto ${titleCase(leg.toName)}',
+            child: Text(context.l10n.walkLeg(leg.distanceMeters.round(), mins, titleCase(leg.toName)),
                 style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant)),
           ),
         ]),
@@ -513,17 +529,17 @@ class LegRow extends StatelessWidget {
             const SizedBox(height: 8),
             Text('${titleCase(leg.fromName)} → ${titleCase(leg.toName)}', style: tt.bodyMedium?.copyWith(color: cs.onSurface)),
             Text(
-              [
-                '${leg.intermediateStops} stops · $mins min · arrive ${hm(leg.end)}',
-              ].join(' · '),
+              context.l10n.legSummary(leg.intermediateStops, mins, hm(leg.end)),
               style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             if (bus != null || leg.realtime) ...[
               const SizedBox(height: 4),
               Text(
                 bus != null
-                    ? 'bus ${bus!.vehicle.label}${bus!.vehicle.started ? '' : ' · not departed yet'} · GPS ${busAge}s ago'
-                    : 'locating bus…',
+                    ? (bus!.vehicle.started
+                        ? context.l10n.busGps(bus!.vehicle.label, busAge!)
+                        : context.l10n.busGpsNotDeparted(bus!.vehicle.label, busAge!))
+                    : context.l10n.locatingBus,
                 style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant),
               ),
             ],
@@ -582,10 +598,10 @@ class _RouteTagChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final (icon, label) = switch (tag) {
-      RouteTag.fastest => (Icons.bolt_rounded, 'Fastest'),
-      RouteTag.fewestChanges => (Icons.swap_horiz_rounded, 'Fewest changes'),
-      RouteTag.leastWalking => (Icons.directions_walk_rounded, 'Least walking'),
-      RouteTag.onFoot => (Icons.directions_walk_rounded, 'Faster on foot'),
+      RouteTag.fastest => (Icons.bolt_rounded, context.l10n.tagFastest),
+      RouteTag.fewestChanges => (Icons.swap_horiz_rounded, context.l10n.tagFewestChanges),
+      RouteTag.leastWalking => (Icons.directions_walk_rounded, context.l10n.tagLeastWalking),
+      RouteTag.onFoot => (Icons.directions_walk_rounded, context.l10n.tagFasterOnFoot),
     };
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 3, 10, 3),
