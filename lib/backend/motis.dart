@@ -43,6 +43,13 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
   }
 
   static String _ll(LatLng p) => '${p.latitude},${p.longitude}';
+
+  /// A time for MOTIS: UTC, whole seconds. With microseconds (as Dart
+  /// writes DateTime.now()) Transitous misreads it, days off.
+  static String motisTime(DateTime t) {
+    final u = t.toUtc();
+    return DateTime.utc(u.year, u.month, u.day, u.hour, u.minute, u.second).toIso8601String().replaceFirst('.000Z', 'Z');
+  }
   static DateTime _time(String s) => DateTime.parse(s).toLocal();
   static LatLng _pos(Map<String, dynamic> j) => LatLng((j['lat'] as num).toDouble(), (j['lon'] as num).toDouble());
 
@@ -263,7 +270,7 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     final run = '${parts[0]}_${parts[1]}_${parts[2]}_';
     final d = await _get('/api/v6/stoptimes', {
       'stopId': stopId,
-      'time': at.subtract(const Duration(minutes: 5)).toUtc().toIso8601String(),
+      'time': motisTime(at.subtract(const Duration(minutes: 5))),
       'n': '30',
       'radius': '0',
       'exactRadius': 'true',

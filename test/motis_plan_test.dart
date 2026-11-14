@@ -59,11 +59,13 @@ void main() {
       asked = req.url;
       return http.Response(body, 200);
     }));
-    final at = DateTime.utc(2026, 11, 14, 3, 54);
+    final at = DateTime.utc(2026, 11, 14, 3, 54, 2, 294, 801);
     final id = await client.sameRun('20261114_03:50_it-Lazio-Cotral_158352099',
         stopId: 'it-Lazio-Cotral_f14084', at: at, line: 'CC597A');
     expect(id, '20261114_03:50_it-Lazio-Cotral_158245690');
     expect(asked?.queryParameters['stopId'], 'it-Lazio-Cotral_f14084');
+    // Whole seconds: Transitous misreads microseconds (days off).
+    expect(asked?.queryParameters['time'], '2026-11-14T03:49:02Z');
     expect(await client.sameRun('20261114_05:00_it-Lazio-Cotral_1', stopId: 'x', at: at, line: 'CC597A'), isNull);
   });
 }
