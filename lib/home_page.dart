@@ -18,6 +18,7 @@ import 'backend/route_search.dart';
 import 'backend/trip_variants.dart';
 import 'area_buses.dart';
 import 'attribution.dart';
+import 'bus_cone.dart';
 import 'favorites.dart';
 import 'l10n.dart';
 import 'line_view.dart';
@@ -36,6 +37,14 @@ const kWalkColor = '#9E9E9E';
 
 /// Sheet peek: drag handle + destination search bar.
 const kSheetPeek = 128.0;
+
+/// The bottom sheet's widest (M3EBottomSheetTheme.maxWidth): centred, so
+/// on wider screens the map shows on both sides of it.
+const kSheetMaxWidth = 640.0;
+
+/// Room the map credit (left) and the center button (right) need beside the
+/// sheet to sit in the bottom corners instead of above it.
+const _kCornerSpace = 140.0;
 
 /// Below this zoom the map shows no stops and the sheet only the search bar.
 const kMinStopsZoom = 14.0;
@@ -240,18 +249,43 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   /// Buses of the selected journey or the open line, on the map.
   late final LiveBusTracker tracker = LiveBusTracker(
-    onFrame: (g) async {
-      if (map != null && styleReady) await map!.setGeoJsonSource('buses', g);
-    },
+    onFrame: (g) => _drawBuses('buses', g),
+    pathOf: _busPath,
+    stopPosition: (id) => _stopPositions[id],
   );
 
   /// Every bus around the map while browsing (no journey or line open).
   late final AreaBuses areaBuses = AreaBuses(
     connection: live,
-    tracker: LiveBusTracker(onFrame: (g) async {
-      if (map != null && styleReady) await map!.setGeoJsonSource('area-buses', g);
-    }),
+    tracker: LiveBusTracker(onFrame: (g) => _drawBuses('area-buses', g), stopPosition: (id) => _stopPositions[id]),
   );
+
+  /// Every stop seen on the map so far, by id: where buses are heading.
+  final Map<String, LatLng> _stopPositions = {};
+
+  /// Heading cone images already on the map, by image name (one per color).
+  final Set<String> _coneImages = {};
+
+  Future<void> _drawBuses(String source, Map<String, dynamic> g) async {
+    final m = map;
+    if (m == null || !styleReady) return;
+    for (final f in (g['features'] as List).cast<Map<String, dynamic>>()) {
+      final props = f['properties'] as Map<String, dynamic>;
+      final name = props['cone'] as String?;
+      if (name == null || !_coneImages.add(name)) continue;
+      try {
+        await m.addImage(name, await busConeImage(hexColor(props['color'] as String)), false, 3);
+      } catch (_) {
+        _coneImages.remove(name); // try again next frame
+      }
+    }
+    await m.setGeoJsonSource(source, g);
+  }
+
+  /// The path a bus of the open line or the selected journey drives along:
+  /// the shown trip's (the line view shows one direction's buses), or the
+  /// ride's whole path.
+  List<LatLng>? _busPath(String key, Vehicle v) => line != null ? line!.trip?.points : tripPaths[key];
 
   /// The live stream is closed while the app is in the background.
   late final AppLifecycleListener _lifecycle = AppLifecycleListener(
@@ -524,6 +558,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           if (next.isNotEmpty) rows.add(BoardRow(stop: r.stop, line: r.line, mode: r.mode, headsign: r.headsign, next: next));
         }
       }
+      for (final s in pins) {
+        _stopPositions[s.id] = s.position;
+      }
+      areaBuses.tracker.refreshHeadings(); // buses can now point at these stops
       setState(() {
         nearbyStops = pins;
         stopById
@@ -631,6 +669,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       paths.tripPath(leg).then((p) {
         if (!mounted || p.isEmpty) return;
         tripPaths[id] = p;
+        tracker.refreshHeadings();
         _drawApproach();
       });
     }
@@ -696,8 +735,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _lineTopics.sync({
       TramiteClient.lineTopic(id): (data) {
         if (!mounted || line != state) return;
-        final buses = TramiteClient.parseVehicles(data);
-        tracker.show({for (final b in buses) b.vehicle.tripId ?? b.vehicle.id: (vehicle: b.vehicle, color: _lineColor)});
+        final buses = state.buses = TramiteClient.parseVehicles(data);
         for (final b in buses) {
           final t = b.vehicle.backendTripId, stop = b.vehicle.stopId;
           if (t == null) continue;
@@ -705,6 +743,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           // The stop it heads to, now: where the planner can find the run.
           if (stop != null) state.runHints[t] = (stopId: stop, at: DateTime.now());
         }
+        _showLineBuses();
         if (state.tripId == null) {
           final first = state.directions.values.firstOrNull;
           if (first != null) {
@@ -729,10 +768,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       state.trip = null;
       state.error = null;
     });
+    _showLineBuses();
     try {
       final t = await _tripOrSameRun(trips, id, state);
       if (line != state) return;
       setState(() => state.trip = t);
+      _showLineBuses();
       _drawLine();
       _fitTo(t.points);
     } catch (e) {
@@ -845,6 +886,23 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   /// Off the bus: journeys start from your location again.
   void _leaveBoard() => _setOrigin(here != null ? _myLocation(here!) : _fallback);
+
+  /// The open line's buses going the shown trip's way (the direction
+  /// switch shows the others). Its direction: the loaded trip's, else that
+  /// of the bus running it; unknown, every bus.
+  void _showLineBuses() {
+    final state = line;
+    if (state == null) return;
+    final dir = state.trip?.directionId ??
+        state.buses.where((b) => b.vehicle.backendTripId == state.tripId).firstOrNull?.vehicle.directionId;
+    tracker.show({
+      for (final b in state.buses)
+        if (dir == null || b.vehicle.directionId == null || b.vehicle.directionId == dir || b.vehicle.backendTripId == state.tripId)
+          b.vehicle.tripId ?? b.vehicle.id: (vehicle: b.vehicle, color: _lineColor),
+    });
+    tracker.refreshHeadings(); // the shown trip's path may be new
+    _drawApproach();
+  }
 
   /// Trip id of the other direction, if a live bus is running it.
   String? _otherDirection() {
@@ -1015,6 +1073,23 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         const CircleLayerProperties(
             circleRadius: 9, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 3),
         enableInteraction: false);
+    // Heading cones, under the bus circles: soft wedges in the bus color,
+    // turned with the map. Only buses whose heading is known have one.
+    for (final (source, size) in [('area-buses', 0.9), ('buses', 1.2)]) {
+      await m.addSymbolLayer(source, '$source-cone',
+          SymbolLayerProperties(
+            iconImage: ['get', 'cone'],
+            iconRotate: ['get', 'heading'],
+            iconRotationAlignment: 'map',
+            iconPitchAlignment: 'map',
+            iconSize: size,
+            iconAllowOverlap: true,
+            iconIgnorePlacement: true,
+          ),
+          filter: ['has', 'heading'],
+          minzoom: source == 'area-buses' ? AreaBuses.minZoom : null,
+          enableInteraction: false);
+    }
     // Browsing: every bus around, smaller than a route's or line's own.
     await m.addCircleLayer('area-buses', 'area-buses-circle',
         const CircleLayerProperties(
@@ -1552,6 +1627,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               onMapCreated: (c) {
                 map = c;
                 styleReady = false;
+                _coneImages.clear(); // a new map (e.g. dark mode) has none
               },
               onStyleLoadedCallback: _onStyleLoaded,
               onCameraIdle: _onCameraIdle,
@@ -1563,12 +1639,19 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               compassEnabled: false,
               attributionEnabled: false, // replaced by MapCredit
             ),
-            // Credit and center button ride right above the sheet.
+            // Credit and center button: in the bottom corners when the sheet
+            // leaves room beside it (wide screens), else right above it.
             ValueListenableBuilder<double>(
               valueListenable: _sheetTop,
-              builder: (context, top, child) => top > MediaQuery.sizeOf(context).height * 0.6
-                  ? const SizedBox.shrink() // sheet up: nothing to sit on
-                  : Positioned(left: 0, right: 0, bottom: top, child: child!),
+              builder: (context, top, child) {
+                final size = MediaQuery.sizeOf(context);
+                if ((size.width - math.min(size.width, kSheetMaxWidth)) / 2 >= _kCornerSpace) {
+                  return Positioned(left: 0, right: 0, bottom: MediaQuery.paddingOf(context).bottom, child: child!);
+                }
+                return top > size.height * 0.6
+                    ? const SizedBox.shrink() // sheet up: nothing to sit on
+                    : Positioned(left: 0, right: 0, bottom: top, child: child!);
+              },
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(4, 0, 12, 8),
                 child: Row(crossAxisAlignment: CrossAxisAlignment.end, children: [

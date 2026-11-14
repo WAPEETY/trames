@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:maplibre_gl/maplibre_gl.dart';
 
 import 'backend/backend.dart';
+import 'backend/heading.dart';
 
 /// A bus on the map: animates from where it is drawn to its latest position.
 class TrackedBus {
@@ -13,12 +14,19 @@ class TrackedBus {
 
   Vehicle vehicle;
   String color;
+
+  /// Which way it heads (degrees from north), for the cone; null: unknown.
+  double? heading;
+
+  /// Direction of its last real move (see [headingOfMove]).
+  double? _moveHeading;
   LatLng _from;
   LatLng _to;
   LatLng drawn;
   DateTime _animStart = DateTime.now();
 
   void update(Vehicle v, String c) {
+    _moveHeading = headingOfMove(vehicle.position, v.position) ?? _moveHeading;
     _from = drawn;
     _to = v.position;
     _animStart = DateTime.now();
@@ -38,6 +46,9 @@ class TrackedBus {
   }
 }
 
+/// Map image name of the heading cone in [color] (a "#RRGGBB" hex).
+String coneImageName(String color) => 'cone-${color.replaceFirst('#', '').toUpperCase()}';
+
 /// Draws a set of buses on a GeoJSON map source, animating each from where
 /// it is to its newest position. Whoever follows the buses (a ride, a line,
 /// the map area) pushes them with [show]; this only draws.
@@ -47,11 +58,22 @@ class TrackedBus {
 class LiveBusTracker {
   LiveBusTracker({
     required this.onFrame,
+    this.pathOf,
+    this.stopPosition,
     this.animation = const Duration(seconds: 4),
     this.frameInterval = const Duration(milliseconds: 66),
   });
 
   final Future<void> Function(Map<String, dynamic> geojson) onFrame;
+
+  /// The path a shown bus drives along (its trip's shape), when known: its
+  /// heading is the path's direction there. Without it, or off the path,
+  /// the direction it last moved in.
+  final List<LatLng>? Function(String key, Vehicle vehicle)? pathOf;
+
+  /// Where a stop is, by id, when known: a bus heads towards the stop the
+  /// feed says it's going to (see [_resolveHeading]).
+  final LatLng? Function(String stopId)? stopPosition;
 
   /// How long a bus takes to glide to a new position.
   final Duration animation;
@@ -77,8 +99,42 @@ class LiveBusTracker {
       }
     }
     buses.removeWhere((k, _) => !next.containsKey(k));
+    for (final MapEntry(:key, value: b) in buses.entries) {
+      _resolveHeading(key, b);
+    }
     lastFeed = buses.values.map((b) => b.vehicle.timestamp).fold<DateTime?>(null, (a, b) => a == null || b.isAfter(a) ? b : a);
     _frame ??= Timer.periodic(frameInterval, (_) => _tick());
+  }
+
+  /// Works the headings out again (e.g. once a trip's path has loaded).
+  void refreshHeadings() {
+    if (buses.isEmpty) return;
+    for (final MapEntry(:key, value: b) in buses.entries) {
+      _resolveHeading(key, b);
+    }
+    _frame ??= Timer.periodic(frameInterval, (_) => _tick());
+  }
+
+  /// The feed's own bearing if it has one (Rome's doesn't), else along the
+  /// path, else towards the stop it's going to, else the last move; else
+  /// the one it had.
+  void _resolveHeading(String key, TrackedBus b) {
+    final v = b.vehicle;
+    final path = pathOf?.call(key, v);
+    b.heading = v.bearing ??
+        (path == null ? null : headingOnPath(path, v.position, hint: b._moveHeading ?? b.heading)) ??
+        _towardsNextStop(v) ??
+        b._moveHeading ??
+        b.heading;
+  }
+
+  /// Bearing to the stop it heads to; none when that's unknown or the bus
+  /// is (almost) there, where the direction to it means nothing.
+  double? _towardsNextStop(Vehicle v) {
+    final id = v.stopId;
+    final stop = id == null ? null : stopPosition?.call(id);
+    if (stop == null || distanceMeters(v.position, stop) < 30) return null;
+    return bearingDegrees(v.position, stop);
   }
 
   void clear() {
@@ -119,6 +175,7 @@ class LiveBusTracker {
                 'id': id,
                 'line': b.vehicle.routeShortName ?? '',
                 'color': b.color,
+                if (b.heading case final h?) ...{'heading': h, 'cone': coneImageName(b.color)},
               },
             },
         ],

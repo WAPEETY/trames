@@ -21,6 +21,10 @@ class LineState {
   /// GTFS direction id -> a trip id running that way (from live vehicles).
   Map<int, String> directions = {};
 
+  /// Every live bus of the line, both directions; the map shows the ones
+  /// going the way of the shown trip.
+  List<({Vehicle vehicle, String? color})> buses = const [];
+
   /// Where each known trip can be found again if the planner doesn't know
   /// its id (another timetable version; see TripDetails.sameRun).
   Map<String, RunHint> runHints = {};
