@@ -18,8 +18,10 @@ class AreaBuses {
   final LiveBusTracker tracker;
   String defaultColor;
 
-  /// Below this zoom the buses would be too many and too small: none.
-  static const minZoom = 13.0;
+  /// Below this zoom the buses would be too many and too small: none. Two
+  /// levels below the stops (kMinStopsZoom): buses stay a while longer when
+  /// zooming out.
+  static const minZoom = 12.0;
 
   /// The followed area extends this fraction of the view's size on each side.
   static const margin = 0.5;

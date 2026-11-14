@@ -19,6 +19,10 @@ class LineState {
 
   /// GTFS direction id -> a trip id running that way (from live vehicles).
   Map<int, String> directions = {};
+
+  /// Where each known trip can be found again if the planner doesn't know
+  /// its id (another timetable version; see TripDetails.sameRun).
+  Map<String, RunHint> runHints = {};
 }
 
 /// Header + stop list for the line view.

@@ -45,7 +45,15 @@ abstract interface class TripDetails {
   /// Full run of a trip by the planner's trip id.
   Future<TripInfo> trip(String backendTripId);
 
+  /// This planner's id for the run [tripId] stands for, when [tripId] comes
+  /// from another version of the operator's timetable (e.g. from Tramite,
+  /// whose timetable may be newer): the trip calling at [stopId] around
+  /// [at], with the same service date, start time and [line]. Null if none.
+  Future<String?> sameRun(String tripId, {required String stopId, required DateTime at, String? line});
 }
+
+/// Where and when a run can be found again (see [TripDetails.sameRun]).
+typedef RunHint = ({String stopId, DateTime at});
 
 abstract interface class WalkRouter {
   /// Street walking route from [from] to [to], or null if none.

@@ -255,6 +255,27 @@ class MotisClient implements TripPlanner, PlaceSearch, StopBoards, TripPaths, Tr
     );
   }
 
+  @override
+  Future<String?> sameRun(String tripId, {required String stopId, required DateTime at, String? line}) async {
+    // <date>_<HH:MM>_<feed>_<trip>: the run is the first three parts.
+    final parts = tripId.split('_');
+    if (parts.length < 4) return null;
+    final run = '${parts[0]}_${parts[1]}_${parts[2]}_';
+    final d = await _get('/api/v6/stoptimes', {
+      'stopId': stopId,
+      'time': at.subtract(const Duration(minutes: 5)).toUtc().toIso8601String(),
+      'n': '30',
+      'radius': '0',
+      'exactRadius': 'true',
+    }) as Map<String, dynamic>;
+    for (final s in (d['stopTimes'] as List).cast<Map<String, dynamic>>()) {
+      final id = s['tripId'] as String?;
+      final name = s['routeShortName'] as String? ?? s['displayName'] as String?;
+      if (id != null && id.startsWith(run) && (line == null || name?.toLowerCase() == line.toLowerCase())) return id;
+    }
+    return null;
+  }
+
   // ---- PlaceSearch ----
 
   @override

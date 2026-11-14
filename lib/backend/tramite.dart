@@ -130,6 +130,7 @@ class TramiteClient {
         bearing: (j['bearing'] as num?)?.toDouble(),
         directionId: j['directionId'] as int?,
         stopSequence: j['currentStopSequence'] as int?,
+        stopId: j['stopId'] as String?,
       ),
       color: color == null || color.isEmpty ? null : '#$color',
     );

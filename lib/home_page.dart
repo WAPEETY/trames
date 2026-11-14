@@ -562,13 +562,14 @@ class _HomePageState extends State<HomePage> {
   /// direction with a live bus. [lineId] is the line in Tramite (e.g.
   /// "it-Lazio-Rome_85"), known from line search; else derived from [tripId].
   /// Without Tramite for the line: its route only, no live buses.
-  Future<void> _openLine({required String name, required String mode, String? tripId, String? lineId}) async {
+  Future<void> _openLine({required String name, required String mode, String? tripId, String? lineId, RunHint? hint}) async {
     final trips = backend.trips;
     if (trips == null) return;
     HapticFeedback.selectionClick();
     if (selected != null) _deselect();
     if (to != null) _clearDestination();
     final state = LineState(name, mode)..tripId = tripId;
+    if (tripId != null && hint != null) state.runHints[tripId] = hint;
     setState(() => line = state);
     if (sheetValue == M3EBottomSheetValue.preview) sheet.animateTo(M3EBottomSheetValue.collapsed);
     _drawNearbyStops();
@@ -589,7 +590,11 @@ class _HomePageState extends State<HomePage> {
         final buses = TramiteClient.parseVehicles(data);
         tracker.show({for (final b in buses) b.vehicle.tripId ?? b.vehicle.id: (vehicle: b.vehicle, color: _lineColor)});
         for (final b in buses) {
-          if (b.vehicle.backendTripId case final t?) state.directions.putIfAbsent(b.vehicle.directionId ?? 0, () => t);
+          final t = b.vehicle.backendTripId, stop = b.vehicle.stopId;
+          if (t == null) continue;
+          state.directions.putIfAbsent(b.vehicle.directionId ?? 0, () => t);
+          // The stop it heads to, now: where the planner can find the run.
+          if (stop != null) state.runHints[t] = (stopId: stop, at: DateTime.now());
         }
         if (state.tripId == null) {
           final first = state.directions.values.firstOrNull;
@@ -616,7 +621,7 @@ class _HomePageState extends State<HomePage> {
       state.error = null;
     });
     try {
-      final t = await trips.trip(id);
+      final t = await _tripOrSameRun(trips, id, state);
       if (line != state) return;
       setState(() => state.trip = t);
       _drawLine();
@@ -624,6 +629,37 @@ class _HomePageState extends State<HomePage> {
     } catch (e) {
       if (line == state) setState(() => state.error = 'Could not load the line: $e');
     }
+  }
+
+  /// The trip from the planner; if it doesn't know the id (it came from
+  /// Tramite, whose timetable can be a newer version), the same run under
+  /// the planner's id, found where the hint says it passes.
+  Future<TripInfo> _tripOrSameRun(TripDetails trips, String id, LineState state) async {
+    try {
+      return await trips.trip(id);
+    } catch (_) {
+      final hint = state.runHints[id];
+      if (hint == null) rethrow;
+      final same = await trips.sameRun(id, stopId: hint.stopId, at: hint.at, line: state.name);
+      if (same == null || same == id) rethrow;
+      return trips.trip(same);
+    }
+  }
+
+  /// A bus tapped on the map while browsing: its trip in the line view, as
+  /// when tapping a departure. Its next stop, now, is where the planner can
+  /// find the run if the trip id is from another timetable version.
+  void _openBus(String vehicleId) {
+    final v = areaBuses.tracker.buses[vehicleId]?.vehicle;
+    final name = v?.routeShortName;
+    if (v == null || name == null) return;
+    final stop = v.stopId;
+    _openLine(
+      name: name,
+      mode: 'BUS',
+      tripId: v.backendTripId,
+      hint: stop == null ? null : (stopId: stop, at: DateTime.now()),
+    );
   }
 
   /// Trip id of the other direction, if a live bus is running it.
@@ -712,9 +748,11 @@ class _HomePageState extends State<HomePage> {
     final labelColor = _hex(Theme.of(context).colorScheme.onSurface);
     final haloColor = _hex(Theme.of(context).colorScheme.surface);
     await m.addGeoJsonSource('nearby', empty, promoteId: 'id');
-    for (final id in ['line', 'line-stops', 'approach', 'route', 'stops', 'endpoints', 'area-buses', 'buses']) {
+    for (final id in ['line', 'line-stops', 'approach', 'route', 'stops', 'endpoints', 'buses']) {
       await m.addGeoJsonSource(id, empty);
     }
+    // Feature id = vehicle id: a tapped bus opens its trip.
+    await m.addGeoJsonSource('area-buses', empty, promoteId: 'id');
     // Stop pins: tappable (filters departures to that stop); the selected one
     // is bigger.
     await m.addCircleLayer('nearby', 'nearby-circle',
@@ -740,6 +778,10 @@ class _HomePageState extends State<HomePage> {
         ),
         minzoom: kStopNamesZoom);
     m.onFeatureTapped.add((_, _, id, layerId, _) {
+      if (layerId == 'area-buses-circle' || layerId == 'area-buses-label') {
+        _openBus(id);
+        return;
+      }
       if (layerId != 'nearby-circle' && layerId != 'nearby-label') return;
       final stop = stopById[id];
       if (stop != null) _filterTo(stop);
@@ -793,8 +835,7 @@ class _HomePageState extends State<HomePage> {
     await m.addCircleLayer('area-buses', 'area-buses-circle',
         const CircleLayerProperties(
             circleRadius: 11, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 2),
-        minzoom: AreaBuses.minZoom,
-        enableInteraction: false);
+        minzoom: AreaBuses.minZoom);
     await m.addSymbolLayer('area-buses', 'area-buses-label',
         const SymbolLayerProperties(
           textField: ['get', 'line'],
@@ -804,8 +845,7 @@ class _HomePageState extends State<HomePage> {
           textAllowOverlap: true,
           textIgnorePlacement: true,
         ),
-        minzoom: AreaBuses.minZoom,
-        enableInteraction: false);
+        minzoom: AreaBuses.minZoom);
     await m.addCircleLayer('buses', 'buses-circle',
         const CircleLayerProperties(
             circleRadius: 15, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 3),
@@ -1503,11 +1543,15 @@ class _HomePageState extends State<HomePage> {
                     certainty: _depCertainty(list[i].next.first),
                     showStop: filterStop == null,
                   ),
-              onTap: (i) => _openLine(
-                name: list[i].line,
-                mode: list[i].mode,
-                tripId: list[i].next.first.backendTripId,
-              ),
+              onTap: (i) {
+                final d = list[i].next.first;
+                _openLine(
+                  name: list[i].line,
+                  mode: list[i].mode,
+                  tripId: d.backendTripId,
+                  hint: d.stopId == null ? null : (stopId: d.stopId!, at: d.time),
+                );
+              },
             ),
           ],
       ],

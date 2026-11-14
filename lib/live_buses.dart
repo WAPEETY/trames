@@ -107,14 +107,16 @@ class LiveBusTracker {
   Map<String, dynamic> _geojson() => {
         'type': 'FeatureCollection',
         'features': [
-          for (final b in buses.values)
+          for (final MapEntry(key: id, value: b) in buses.entries)
             {
               'type': 'Feature',
+              'id': id,
               'geometry': {
                 'type': 'Point',
                 'coordinates': [b.drawn.longitude, b.drawn.latitude],
               },
               'properties': {
+                'id': id,
                 'line': b.vehicle.routeShortName ?? '',
                 'color': b.color,
               },

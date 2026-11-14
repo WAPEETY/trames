@@ -338,6 +338,7 @@ class Vehicle {
     this.directionId,
     this.stopSequence,
     this.backendTripId,
+    this.stopId,
   });
 
   final String id;
@@ -345,6 +346,9 @@ class Vehicle {
 
   /// The trip in Transitous form (to load its route and stops), when known.
   final String? backendTripId;
+
+  /// The stop it is at or heading to (backend id), when known.
+  final String? stopId;
 
   /// GTFS-RT current_stop_sequence: the stop the bus is at or heading to
   /// (1 = the first stop, the terminus). Null when the feed doesn't say.

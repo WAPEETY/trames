@@ -45,4 +45,25 @@ void main() {
     expect(its.single.legs[1].fromStopId, 'it-Lazio-Rome_1');
     expect(its.single.legs[1].toStopId, 'it-Lazio-Rome_2');
   });
+
+  test('the same run under another trip id: same date, start and line at the stop', () async {
+    final body = jsonEncode({
+      'stopTimes': [
+        {'tripId': '20261114_03:50_it-Lazio-Cotral_158245687', 'routeShortName': 'VT1A'},
+        {'tripId': '20261114_03:50_it-Lazio-Cotral_158245690', 'routeShortName': 'CC597A'},
+        {'tripId': '20261114_04:20_it-Lazio-Cotral_158245700', 'routeShortName': 'CC597A'},
+      ],
+    });
+    Uri? asked;
+    final client = MotisClient(client: MockClient((req) async {
+      asked = req.url;
+      return http.Response(body, 200);
+    }));
+    final at = DateTime.utc(2026, 11, 14, 3, 54);
+    final id = await client.sameRun('20261114_03:50_it-Lazio-Cotral_158352099',
+        stopId: 'it-Lazio-Cotral_f14084', at: at, line: 'CC597A');
+    expect(id, '20261114_03:50_it-Lazio-Cotral_158245690');
+    expect(asked?.queryParameters['stopId'], 'it-Lazio-Cotral_f14084');
+    expect(await client.sameRun('20261114_05:00_it-Lazio-Cotral_1', stopId: 'x', at: at, line: 'CC597A'), isNull);
+  });
 }
