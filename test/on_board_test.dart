@@ -319,6 +319,22 @@ void _liveTests() {
       expect(t.remaining.last.time, _m(23));
     });
 
+    test('the line view\'s stop times: Tramite\'s where live, the planner\'s elsewhere', () {
+      final info = _info();
+      final seen = _seen(late: 9, busSeq: 3);
+      // Tramite has no stop S4 in its timetable version, and no live time at S0 (passed).
+      final first = seen.stops[0];
+      seen.stops[0] = TramiteTripStop(
+          stopId: first.stopId, name: first.name, position: first.position, sequence: 1,
+          scheduledArrival: first.scheduledArrival, arrival: first.scheduledArrival,
+          scheduledDeparture: first.scheduledDeparture, departure: first.scheduledDeparture,
+          realtime: false, inferred: false, cancelled: false);
+      seen.stops.removeAt(4);
+      final stops = stopsAtLiveTimes(info.stops, matchTripStops(info.stops, seen), arrival: false);
+      expect(stops.map((s) => s.time), [_m(-2), _m(11), _m(14), _m(19), _m(15), _m(29)]);
+      expect(stops.map((s) => s.name), info.stops.map((s) => s.name));
+    });
+
     test('no bus seen: Tramite\'s times decide what is ahead', () {
       final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: 9));
       expect(t.remaining.first.stopId, 's0', reason: 'S0 is now due at +7');

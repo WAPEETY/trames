@@ -162,6 +162,28 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// The open line's buses.
   late final LiveTopics _lineTopics = LiveTopics(live);
 
+  /// The trip shown in the line view, for its times at each stop.
+  late final LiveTopics _lineTripTopics = LiveTopics(live);
+
+  /// Follows the line view's trip [id] through Tramite, when it covers it:
+  /// the stop list shows Tramite's times. An id the planner gave (a tapped
+  /// departure) is found by its line and the stop it was seen at.
+  void _followLineTrip(LineState state, String id) {
+    final prefix = tramite.prefixOf(id);
+    if (prefix == null) {
+      _lineTripTopics.clear();
+      return;
+    }
+    final hint = state.runHints[id]?.stopId;
+    _lineTripTopics.sync({
+      TramiteClient.tripTopic(id,
+          lineId: TramiteClient.lineId(prefix, state.name), stopId: tramite.covers(hint) ? hint : null): (data) {
+        if (!mounted || line != state || state.tripId != id) return;
+        setState(() => state.live = TramiteClient.parseTrip(data));
+      },
+    });
+  }
+
   /// How sure a ride's time is: what Tramite says for rides it covers;
   /// otherwise live (counted as on its way: no way to tell) or timetable.
   Certainty _certainty(bool realtime, String? tripId) =>
@@ -470,6 +492,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _legTopics.clear();
     _leaveRide();
     _lineTopics.clear();
+    _lineTripTopics.clear();
     toSearch.dispose();
     fromSearch.dispose();
     favorites.dispose();
@@ -906,8 +929,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     setState(() {
       state.tripId = id;
       state.trip = null;
+      state.live = null;
       state.error = null;
     });
+    _followLineTrip(state, id);
     _showLineBuses();
     try {
       final t = await _tripOrSameRun(trips, id, state);
@@ -1057,6 +1082,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     if (line == null) return;
     setState(() => line = null);
     _lineTopics.clear();
+    _lineTripTopics.clear();
     tracker.clear();
     _drawLine();
     _drawNearbyStops();
@@ -1958,7 +1984,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         l,
         color: Theme.of(context).colorScheme.primary,
         liveBuses: _lineTopics.topics.isEmpty ? null : tracker.buses.length,
-        certainty: _trackedCertainty(l.trip?.realtime ?? false, MotisClient.rawTripId(l.tripId)),
+        certainty: l.live?.certainty ?? _trackedCertainty(l.trip?.realtime ?? false, MotisClient.rawTripId(l.tripId)),
         onBack: _closeLine,
         onSwitchDirection: _otherDirection() == null ? null : () => _loadLineTrip(_otherDirection()!),
         onStopTap: (stop) => map?.animateCamera(CameraUpdate.newLatLngZoom(stop.position, 16.5)),

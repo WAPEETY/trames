@@ -15,6 +15,18 @@ class LineState {
   /// Trip shown (route + stops); one per direction, see [directions].
   String? tripId;
   TripInfo? trip;
+
+  /// Tramite's view of the shown trip, when it covers it: its times.
+  TramiteTrip? live;
+
+  /// The shown trip's stops with the times to show: Tramite's where it has
+  /// a live one, else the planner's (see [stopsAtLiveTimes]).
+  List<TripStop> get stops {
+    final t = trip, seen = live;
+    if (t == null) return const [];
+    return seen == null ? t.stops : stopsAtLiveTimes(t.stops, matchTripStops(t.stops, seen), arrival: false);
+  }
+
   bool loading = true;
   String? error;
 
@@ -48,7 +60,8 @@ List<Widget> lineSlivers(
   final cs = Theme.of(context).colorScheme;
   final tt = Theme.of(context).textTheme;
   final trip = s.trip;
-  final place = trip == null || bus == null ? null : busPlaceOnTrip(trip.stops, bus);
+  final stops = s.stops;
+  final place = trip == null || bus == null ? null : busPlaceOnTrip(stops, bus);
   return [
     SliverToBoxAdapter(
       child: Padding(
@@ -112,7 +125,7 @@ List<Widget> lineSlivers(
       SliverToBoxAdapter(child: SheetLoading(label: context.l10n.loadingLine))
     else
       SliverToBoxAdapter(
-        child: _StopList(trip: trip, color: color, certainty: certainty, place: place, onStopTap: onStopTap),
+        child: _StopList(stops: stops, color: color, certainty: certainty, place: place, onStopTap: onStopTap),
       ),
   ];
 }
@@ -123,8 +136,8 @@ List<Widget> lineSlivers(
 /// layer above the list, where the measured line of the stop it left ends.
 class _StopList extends StatefulWidget {
   const _StopList(
-      {required this.trip, required this.color, required this.certainty, required this.place, required this.onStopTap});
-  final TripInfo trip;
+      {required this.stops, required this.color, required this.certainty, required this.place, required this.onStopTap});
+  final List<TripStop> stops;
   final Color color;
   final Certainty certainty;
   final ({int index, bool atStop})? place;
@@ -160,7 +173,7 @@ class _StopListState extends State<_StopList> {
 
   @override
   Widget build(BuildContext context) {
-    final stops = widget.trip.stops;
+    final stops = widget.stops;
     final place = widget.place;
     final left = _leftIndex;
     final bus = _bus;

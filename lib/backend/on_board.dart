@@ -40,6 +40,45 @@ const kOnBoardWalkMeters = 350.0;
 /// Street walks are longer than the straight line by about this much.
 const _walkDetour = 1.3;
 
+/// For each of a run's [stops] (the planner's), the same stop in [seen]
+/// (both in trip order, so a stop on the trip twice pairs up visit by
+/// visit); null for a stop Tramite's timetable doesn't have.
+List<TramiteTripStop?> matchTripStops(List<TripStop> stops, TramiteTrip seen) {
+  final out = List<TramiteTripStop?>.filled(stops.length, null);
+  var j = 0;
+  for (var i = 0; i < stops.length; i++) {
+    for (var k = j; k < seen.stops.length; k++) {
+      if (seen.stops[k].stopId == stops[i].stopId) {
+        out[i] = seen.stops[k];
+        j = k + 1;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+/// A run's [stops] (the planner's) at the times in use, given Tramite's
+/// view of each ([match], from [matchTripStops]): Tramite's time where it
+/// has a live one (and a believable one, see [TramiteTripStop.plausible]);
+/// where only the planner has a live one, the planner's; where neither,
+/// Tramite's inferred time if there is one, else the timetable. The time
+/// is the [arrival] there, or the departure.
+List<TripStop> stopsAtLiveTimes(List<TripStop> stops, List<TramiteTripStop?> match, {required bool arrival}) => [
+      for (var i = 0; i < stops.length; i++)
+        switch (match[i]) {
+          final m? when m.plausible && (m.realtime || (m.inferred && !stops[i].live)) => TripStop(
+              name: stops[i].name,
+              position: stops[i].position,
+              stopId: stops[i].stopId,
+              time: arrival ? m.arrival : m.departure,
+              scheduled: arrival ? m.scheduledArrival : m.scheduledDeparture,
+              live: m.realtime,
+            ),
+          _ => stops[i],
+        },
+    ];
+
 /// The vehicle you ride, at [now]: where it is and the stops still ahead.
 ///
 /// With [live] (Tramite's view of the run) nothing is guessed: the bus is
@@ -63,23 +102,8 @@ class OnBoardTrip {
       return;
     }
     final seen = live;
-    final match = seen == null ? null : _matchStops(seen);
-    _stops = match == null
-        ? info.stops
-        : [
-            for (var i = 0; i < info.stops.length; i++)
-              switch (match[i]) {
-                final m? when m.plausible && (m.realtime || (m.inferred && !info.stops[i].live)) => TripStop(
-                    name: info.stops[i].name,
-                    position: info.stops[i].position,
-                    stopId: info.stops[i].stopId,
-                    time: m.arrival,
-                    scheduled: m.scheduledArrival,
-                    live: m.realtime,
-                  ),
-                _ => info.stops[i],
-              },
-          ];
+    final match = seen == null ? null : matchTripStops(info.stops, seen);
+    _stops = match == null ? info.stops : stopsAtLiveTimes(info.stops, match, arrival: true);
     // The stop the bus is at or heading to, by the feed; else by the times.
     final seq = seen?.busSequence;
     final first = seq != null && match != null
@@ -103,23 +127,6 @@ class OnBoardTrip {
   /// [info]'s stops with the times in use (see the class comment).
   late final List<TripStop> _stops;
 
-  /// For each of [info]'s stops, the same stop in [seen] (both in trip
-  /// order, so a stop on the trip twice pairs up visit by visit); null for
-  /// a stop Tramite's timetable doesn't have.
-  List<TramiteTripStop?> _matchStops(TramiteTrip seen) {
-    final out = List<TramiteTripStop?>.filled(info.stops.length, null);
-    var j = 0;
-    for (var i = 0; i < info.stops.length; i++) {
-      for (var k = j; k < seen.stops.length; k++) {
-        if (seen.stops[k].stopId == info.stops[i].stopId) {
-          out[i] = seen.stops[k];
-          j = k + 1;
-          break;
-        }
-      }
-    }
-    return out;
-  }
 
   /// The visit of [stopId] nearest [now] (a stop can be on a loop twice).
   int _boardingIndex(String stopId) {
