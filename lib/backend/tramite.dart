@@ -112,6 +112,12 @@ class TramiteClient {
       ? 'departures=$stopId'
       : 'departures=$stopId,trip=$tripId${lineId == null ? '' : ',line=$lineId'}';
   static String lineTopic(String lineId) => 'line=$lineId';
+
+  /// A whole trip: its bus and its times at every stop. [lineId] and
+  /// [stopId] (a stop it calls at) let Tramite match a trip id of another
+  /// timetable version.
+  static String tripTopic(String tripId, {String? lineId, String? stopId}) =>
+      'trip=$tripId${lineId == null ? '' : ',line=$lineId'}${stopId == null ? '' : ',stop=$stopId'}';
   static String bboxTopic(LatLngBounds b) => 'bbox=${[
         b.southwest.latitude,
         b.southwest.longitude,
@@ -214,6 +220,55 @@ class TramiteClient {
     );
   }
 
+  /// A trip topic or endpoint's data; null when it isn't a trip.
+  static TramiteTrip? parseTrip(Object? data) {
+    if (data is! Map<String, dynamic> || data['stopTimes'] is! List) return null;
+    final v = data['vehicle'] as Map<String, dynamic>?;
+    final seq = v?['currentStopSequence'] as int?;
+    final stops = [
+      for (final s in (data['stopTimes'] as List).cast<Map<String, dynamic>>())
+        TramiteTripStop(
+          stopId: s['stopId'] as String,
+          name: s['name'] as String? ?? '',
+          position: LatLng((s['lat'] as num).toDouble(), (s['lon'] as num).toDouble()),
+          sequence: s['stopSequence'] as int,
+          scheduledArrival: _time(s['scheduledArrival'] as String),
+          arrival: _time(s['arrival'] as String),
+          scheduledDeparture: _time(s['scheduledDeparture'] as String),
+          departure: _time(s['departure'] as String),
+          realtime: s['realTime'] as bool? ?? false,
+          inferred: s['departureTimestampReason'] == 'INFERRED',
+          cancelled: s['cancelled'] == true,
+        ),
+    ];
+    Vehicle? bus;
+    if (v != null && v['lat'] != null && v['timestamp'] != null) {
+      bus = Vehicle(
+        id: v['id'] as String,
+        label: v['id'] as String,
+        tripId: data['gtfsTripId'] as String?,
+        backendTripId: data['tripId'] as String?,
+        routeShortName: data['routeShortName'] as String?,
+        position: LatLng((v['lat'] as num).toDouble(), (v['lon'] as num).toDouble()),
+        timestamp: _time(v['timestamp'] as String),
+        bearing: (v['bearing'] as num?)?.toDouble(),
+        directionId: data['directionId'] as int?,
+        stopSequence: seq,
+        stopId: stops.where((s) => s.sequence == seq).firstOrNull?.stopId,
+      );
+    }
+    return TramiteTrip(
+      tripId: data['gtfsTripId'] as String?,
+      backendTripId: data['tripId'] as String?,
+      line: data['routeShortName'] as String? ?? '?',
+      cancelled: data['cancelled'] == true,
+      stops: stops,
+      bus: bus,
+      busSequence: seq,
+      started: v?['started'] as bool?,
+    );
+  }
+
   /// How sure a Tramite stop time is: inferred (on time or late), live with
   /// its bus not yet started (or no bus seen) or on its way, timetable.
   static Certainty certaintyOf(Map<String, dynamic> s, Duration delay) {
@@ -257,4 +312,103 @@ class TramiteException implements Exception {
   final String body;
   @override
   String toString() => 'Tramite $status: $body';
+}
+
+/// One stop of a [TramiteTrip], with the trip's times there.
+class TramiteTripStop {
+  TramiteTripStop({
+    required this.stopId,
+    required this.name,
+    required this.position,
+    required this.sequence,
+    required this.scheduledArrival,
+    required this.arrival,
+    required this.scheduledDeparture,
+    required this.departure,
+    required this.realtime,
+    required this.inferred,
+    required this.cancelled,
+  });
+  final String stopId;
+  final String name;
+  final LatLng position;
+
+  /// The stop's place in the trip (GTFS stop_sequence).
+  final int sequence;
+  final DateTime scheduledArrival;
+  final DateTime arrival;
+  final DateTime scheduledDeparture;
+  final DateTime departure;
+
+  /// [arrival] and [departure] are a live forecast.
+  final bool realtime;
+
+  /// No forecast, but a known bus should run the trip (its times are when).
+  final bool inferred;
+
+  /// The trip skips this stop.
+  final bool cancelled;
+}
+
+/// A whole trip from Tramite: its bus and its times at every stop.
+class TramiteTrip {
+  TramiteTrip({
+    required this.tripId,
+    required this.backendTripId,
+    required this.line,
+    required this.cancelled,
+    required this.stops,
+    this.bus,
+    this.busSequence,
+    this.started,
+  });
+
+  /// Raw GTFS trip_id, and the id in Transitous form.
+  final String? tripId;
+  final String? backendTripId;
+  final String line;
+  final bool cancelled;
+
+  /// Every stop in order (a stop on the trip twice is here twice).
+  final List<TramiteTripStop> stops;
+
+  /// The bus on this trip, with its position (live buses only).
+  final Vehicle? bus;
+
+  /// The stop the bus is at or heading to ([TramiteTripStop.sequence]).
+  final int? busSequence;
+
+  /// Whether the bus has left the first stop; null without a bus on it.
+  final bool? started;
+
+  /// The bus has already gone by [stop] (it is heading to a later one).
+  bool passed(TramiteTripStop stop) => busSequence != null && busSequence! > stop.sequence;
+
+  /// Index of the visit of [stopId] whose timetable time ([arrival]: its
+  /// arrival, else its departure) is nearest [scheduled], from [from] on;
+  /// null when the trip doesn't call there.
+  int? visit(String? stopId, DateTime scheduled, {int from = 0, bool arrival = false}) {
+    int? best;
+    Duration? bestGap;
+    for (var i = from; i < stops.length; i++) {
+      if (stops[i].stopId != stopId) continue;
+      final gap = (arrival ? stops[i].scheduledArrival : stops[i].scheduledDeparture).difference(scheduled).abs();
+      if (bestGap == null || gap < bestGap) {
+        best = i;
+        bestGap = gap;
+      }
+    }
+    return best;
+  }
+
+  /// How sure the trip's times are: inferred (on time or late), live with
+  /// its bus not yet started (or no bus seen) or on its way, timetable.
+  Certainty get certainty {
+    final guess = stops.where((s) => s.inferred).firstOrNull;
+    if (guess != null) {
+      return guess.departure.isAfter(guess.scheduledDeparture) ? Certainty.estimated : Certainty.returning;
+    }
+    if (!stops.any((s) => s.realtime)) return Certainty.scheduled;
+    return started == true ? Certainty.moving : Certainty.waiting;
+  }
 }

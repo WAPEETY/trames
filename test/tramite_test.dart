@@ -65,6 +65,32 @@ void main() {
     expect(board.single.stop, stop);
   });
 
+  test('a whole trip: its bus, every stop, the certainty', () {
+    Map<String, dynamic> st(String id, int seq, String sched, String time, {bool rt = true, String reason = 'PREDICTED'}) => {
+          'stopId': 'it-Lazio-Rome_$id', 'name': id, 'lat': 41.9, 'lon': 12.5, 'stopSequence': seq,
+          'scheduledArrival': sched, 'arrival': time, 'scheduledDeparture': sched, 'departure': time,
+          'realTime': rt, 'departureTimestampReason': reason,
+        };
+    final t = TramiteClient.parseTrip({
+      'tripId': '20261113_14:33_it-Lazio-Rome_0#2384-15', 'gtfsTripId': '0#2384-15', 'routeShortName': '60', 'directionId': 0,
+      'vehicle': {'id': '5039', 'started': true, 'currentStopSequence': 2, 'lat': 41.91, 'lon': 12.51, 'timestamp': '2026-11-13T13:43:36Z'},
+      'stopTimes': [
+        st('A', 1, '2026-11-13T13:33:00Z', '2026-11-13T13:33:00Z', rt: false, reason: 'NO_RT_DATA'),
+        st('B', 2, '2026-11-13T13:40:00Z', '2026-11-13T13:45:00Z'),
+        st('C', 3, '2026-11-13T13:50:00Z', '2026-11-13T13:55:00Z', reason: 'PROPAGATED'),
+      ],
+    })!;
+    expect(t.tripId, '0#2384-15');
+    expect(t.certainty, Certainty.moving);
+    expect(t.bus?.id, '5039');
+    expect(t.bus?.stopId, 'it-Lazio-Rome_B', reason: 'the stop it is heading to');
+    expect(t.passed(t.stops[0]), isTrue);
+    expect(t.passed(t.stops[1]), isFalse);
+    expect(t.stops[2].arrival.difference(t.stops[2].scheduledArrival), const Duration(minutes: 5));
+    expect(TramiteClient.parseTrip(null), isNull);
+    expect(TramiteClient.tripTopic('T', lineId: 'p_60', stopId: 'p_A'), 'trip=T,line=p_60,stop=p_A');
+  });
+
   test('vehicles with their line colour', () {
     final vs = TramiteClient.parseVehicles([
       {'source': 'rome', 'id': '5039', 'routeShortName': '60', 'routeColor': 'D02F2F', 'gtfsTripId': '0#2384-15',

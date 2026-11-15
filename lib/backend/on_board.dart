@@ -42,20 +42,82 @@ const _walkDetour = 1.3;
 
 /// The vehicle you ride, at [now]: where it is and the stops still ahead.
 ///
+/// With [live] (Tramite's view of the run) nothing is guessed: the bus is
+/// where its GPS says, the stops ahead start at the one the feed says it's
+/// at or heading to, and each stop's time is Tramite's when it has a live
+/// one, else the planner's (its own live time, or the timetable). Without
+/// it, or where it says nothing, the stops ahead are those whose time is
+/// still to come and the bus is placed between two stops by their times.
+///
 /// With [boardedAt] it's a ride you will board at that stop at [now] (a
 /// journey's ride, checked like the bus you're on): the stops ahead are
 /// those after it.
 class OnBoardTrip {
-  OnBoardTrip(this.ride, this.info, {required this.now, String? boardedAt}) {
+  OnBoardTrip(this.ride, this.info, {required this.now, String? boardedAt, this.live}) {
     final at = boardedAt == null ? -1 : _boardingIndex(boardedAt);
     if (at >= 0) {
+      _stops = info.stops;
       remaining = [for (final s in info.stops.skip(at + 1)) if (s.time != null) s];
       position = info.stops[at].position;
       return;
     }
-    final first = info.stops.indexWhere((s) => s.time != null && !s.time!.isBefore(now));
-    remaining = first < 0 ? const [] : [for (final s in info.stops.skip(first)) if (s.time != null) s];
-    position = _whereNow(first);
+    final seen = live;
+    final match = seen == null ? null : _matchStops(seen);
+    _stops = match == null
+        ? info.stops
+        : [
+            for (var i = 0; i < info.stops.length; i++)
+              switch (match[i]) {
+                final m? when m.realtime || (m.inferred && !info.stops[i].live) => TripStop(
+                    name: info.stops[i].name,
+                    position: info.stops[i].position,
+                    stopId: info.stops[i].stopId,
+                    time: m.arrival,
+                    scheduled: m.scheduledArrival,
+                    live: m.realtime,
+                  ),
+                _ => info.stops[i],
+              },
+          ];
+    // The stop the bus is at or heading to, by the feed; else by the times.
+    final seq = seen?.busSequence;
+    final first = seq != null && match != null
+        ? match.indexWhere((m) => m != null && m.sequence >= seq)
+        : _stops.indexWhere((s) => s.time != null && !s.time!.isBefore(now));
+    // A late bus is still to come at stops whose time has gone by: never
+    // before now, never before the stop before.
+    var floor = now;
+    remaining = [
+      if (first >= 0)
+        for (var i = first; i < _stops.length; i++)
+          if (_stops[i].time != null && !(match?[i]?.cancelled ?? false))
+            _stops[i].notBefore(floor = _stops[i].time!.isAfter(floor) ? _stops[i].time! : floor),
+    ];
+    position = seen?.bus?.position ?? _whereNow(first);
+  }
+
+  /// Tramite's view of this run, when it covers it.
+  final TramiteTrip? live;
+
+  /// [info]'s stops with the times in use (see the class comment).
+  late final List<TripStop> _stops;
+
+  /// For each of [info]'s stops, the same stop in [seen] (both in trip
+  /// order, so a stop on the trip twice pairs up visit by visit); null for
+  /// a stop Tramite's timetable doesn't have.
+  List<TramiteTripStop?> _matchStops(TramiteTrip seen) {
+    final out = List<TramiteTripStop?>.filled(info.stops.length, null);
+    var j = 0;
+    for (var i = 0; i < info.stops.length; i++) {
+      for (var k = j; k < seen.stops.length; k++) {
+        if (seen.stops[k].stopId == info.stops[i].stopId) {
+          out[i] = seen.stops[k];
+          j = k + 1;
+          break;
+        }
+      }
+    }
+    return out;
   }
 
   /// The visit of [stopId] nearest [now] (a stop can be on a loop twice).
@@ -77,15 +139,15 @@ class OnBoardTrip {
   /// Stops not reached yet (by their live times when known), in order.
   late final List<TripStop> remaining;
 
-  /// Where the vehicle should be now: between the last stop it passed and
-  /// the next, by their times.
+  /// Where the vehicle is: its live position, else where it should be now,
+  /// between the last stop it passed and the next, by their times.
   late final LatLng position;
 
   LatLng _whereNow(int next) {
-    if (next < 0) return info.stops.isEmpty ? const LatLng(0, 0) : info.stops.last.position;
-    final b = info.stops[next];
+    if (next < 0) return _stops.isEmpty ? const LatLng(0, 0) : _stops.last.position;
+    final b = _stops[next];
     if (next == 0) return b.position;
-    final a = info.stops[next - 1];
+    final a = _stops[next - 1];
     if (a.time == null || !b.time!.isAfter(a.time!)) return b.position;
     final f = (now.difference(a.time!).inSeconds / b.time!.difference(a.time!).inSeconds).clamp(0.0, 1.0);
     return LatLng(
@@ -348,8 +410,8 @@ bool staysOnBoard(Itinerary it) {
 ///    only the stay-on journey is added, nothing is judged (the journey
 ///    shown doesn't change after R).
 ///
-/// Runs come from [runOf] (cached by the caller), at most [maxRuns] per
-/// call: shown buses first, earliest-arriving journeys first. Buses whose
+/// Runs come from [runOf] (cached by the caller; the bus you're on now is
+/// [riding], as the search saw it), at most [maxRuns] per call: shown buses first, earliest-arriving journeys first. Buses whose
 /// run is unknown are left alone: never guess.
 Future<List<Itinerary>> checkStayingOn(
   List<Itinerary> all, {
@@ -361,6 +423,7 @@ Future<List<Itinerary>> checkStayingOn(
   required Duration maxWalk,
   required double walkSpeed,
   int maxRuns = 12,
+  OnBoardTrip? riding,
 }) async {
   // Buses replaced by a walk that the planner's journey ([Itinerary.base])
   // changed from (more buses after them): staying on them instead is worth
@@ -417,7 +480,7 @@ Future<List<Itinerary>> checkStayingOn(
       // The bus you're on now is where it is; any other bus starts at its
       // boarding stop.
       final trip = ride.onBoard
-          ? OnBoardTrip(run, info, now: ride.start)
+          ? (riding != null && riding.isThisRun(ride) ? riding : OnBoardTrip(run, info, now: ride.start))
           : OnBoardTrip(run, info, now: ride.start, boardedAt: ride.fromStopId);
       if (trip.remaining.isEmpty) return null;
       try {

@@ -12,7 +12,7 @@ import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygo
 import 'backend/backend.dart';
 import 'backend/board_detector.dart';
 import 'backend/config.dart';
-import 'backend/estimated_rides.dart';
+import 'backend/live_rides.dart';
 import 'backend/live_connection.dart';
 import 'backend/motis.dart' show MotisClient;
 import 'backend/route_search.dart';
@@ -106,15 +106,52 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   // Departures for the visible map area (idle state).
   List<BoardRow> nearby = [];
 
-  /// Tramite's view of the journeys' rides, by raw trip id: how sure each
-  /// is, its inferred time, its bus. Only for rides Tramite covers; kept in
-  /// step with the shown journeys by [_syncLegTopics].
-  final Map<String, TramiteRow> _legRows = {};
+  /// Tramite's view of the journeys' rides, by raw trip id: each one's
+  /// whole trip (how sure it is, its bus, its times at every stop). Only
+  /// for rides Tramite covers; kept in step with the shown journeys by
+  /// [_syncLegTopics].
+  final Map<String, TramiteTrip> _legTrips = {};
   late final LiveTopics _legTopics = LiveTopics(live);
 
-  /// Timetable-only rides a known bus should run (from [_legRows]), moved to
-  /// that bus's time by applyEstimatedRides.
-  Map<String, ReturnEstimate> routeReturns = {};
+  /// The bus you're on, followed through Tramite while on board: where it
+  /// really is and its times, for planning from it (see [OnBoardTrip]).
+  LiveSubscription? _rideSub;
+  String? _rideTopic;
+  TramiteTrip? _rideTrip;
+  Completer<void>? _rideKnown;
+
+  /// Tramite's view of [ride] now (waiting a little for the first answer);
+  /// null when Tramite doesn't cover it or doesn't answer.
+  Future<TramiteTrip?> _rideLive(OnBoardRide ride) async {
+    final id = ride.liveTripId ?? ride.backendTripId;
+    if (!tramite.covers(id)) {
+      _leaveRide();
+      return null;
+    }
+    final topic = TramiteClient.tripTopic(id);
+    if (_rideTopic != topic) {
+      _leaveRide();
+      _rideTopic = topic;
+      final known = _rideKnown = Completer<void>();
+      _rideSub = live.subscribe(topic, (data) {
+        if (_rideTopic != topic) return;
+        _rideTrip = TramiteClient.parseTrip(data);
+        if (!known.isCompleted) known.complete();
+      });
+    }
+    await _rideKnown!.future.timeout(const Duration(seconds: 4), onTimeout: () {});
+    return _rideTopic == topic ? _rideTrip : null;
+  }
+
+  void _leaveRide() {
+    _rideSub?.cancel();
+    _rideSub = null;
+    _rideTopic = null;
+    _rideTrip = null;
+  }
+
+  /// What Tramite says about a ride of a journey: its times, or that it's gone.
+  LiveRide? _liveOf(Leg ride) => liveRideFor(ride, _legTrips[ride.tripId]);
 
   /// Board rows from Transitous (stops Tramite doesn't cover), and from
   /// Tramite by stop id (pushed), to rebuild [nearby].
@@ -128,59 +165,91 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// How sure a ride's time is: what Tramite says for rides it covers;
   /// otherwise live (counted as on its way: no way to tell) or timetable.
   Certainty _certainty(bool realtime, String? tripId) =>
-      (tripId == null ? null : _legRows[tripId])?.departure.certainty ??
-      certaintyOf(realtime: realtime, tripId: tripId, returns: routeReturns);
+      (tripId == null ? null : _legTrips[tripId])?.certainty ?? certaintyOf(realtime: realtime, tripId: tripId);
 
   Certainty _depCertainty(Departure d) => d.certainty ?? _certainty(d.realtime, d.tripId);
 
   /// Follows, through Tramite, the rides of the shown journeys (the
-  /// selected one, else the whole list): one topic per ride at its boarding
-  /// stop. Rides Tramite doesn't cover keep Transitous's data.
+  /// selected one, else the whole list), and applies what is known of them.
   void _syncLegTopics() {
-    final legs = selected?.transitLegs ?? [for (final it in _routeItineraries) ...it.transitLegs];
+    _followLegs();
+    _applyLegRows();
+  }
+
+  /// One topic per trip ridden in the shown journeys: the selected
+  /// journey's, else the planner's and (a late bus can swap in another one)
+  /// those of the journeys as listed. Rides Tramite doesn't cover keep
+  /// Transitous's data.
+  void _followLegs() {
+    final legs = selected?.transitLegs ??
+        [
+          for (final it in _routeItineraries) ...it.transitLegs,
+          for (final g in routes)
+            for (final it in g.options) ...it.transitLegs,
+        ];
     final wanted = <String, void Function(Object?)>{};
     final trips = <String>{};
     for (final l in legs) {
       final stop = l.fromStopId, trip = l.backendTripId, raw = l.tripId, prefix = tramite.prefixOf(l.backendTripId);
-      if (stop == null || trip == null || raw == null || prefix == null || !tramite.covers(stop)) continue;
-      trips.add(raw);
+      if (trip == null || raw == null || prefix == null || !trips.add(raw)) continue;
       final line = l.routeShortName;
-      final topic = TramiteClient.departuresTopic(stop,
-          tripId: trip, lineId: line == null ? null : TramiteClient.lineId(prefix, line));
+      // The line and a stop of the ride: to find the run when the planner's
+      // trip id is from another timetable version.
+      final topic = TramiteClient.tripTopic(trip,
+          lineId: line == null ? null : TramiteClient.lineId(prefix, line), stopId: tramite.covers(stop) ? stop : null);
       wanted[topic] = (data) {
         if (!mounted) return;
-        final row = TramiteClient.parseRows(data).firstOrNull;
+        final t = TramiteClient.parseTrip(data);
         setState(() {
-          if (row == null) {
-            _legRows.remove(raw);
+          if (t == null) {
+            _legTrips.remove(raw);
           } else {
-            _legRows[raw] = row;
+            _legTrips[raw] = t;
           }
           _applyLegRows();
         });
       };
     }
-    _legTopics.sync(wanted);
-    _legRows.removeWhere((trip, _) => !trips.contains(trip));
-    _applyLegRows();
+    // A trip already followed keeps its topic, whichever ride asked first.
+    final known = {for (final t in _legTopics.topics) t.split(',').first: t};
+    _legTopics.sync({
+      for (final MapEntry(key: topic, value: onData) in wanted.entries)
+        if (known[topic.split(',').first] case final same? when !wanted.containsKey(same)) same: onData else topic: onData,
+    });
+    _legTrips.removeWhere((trip, _) => !trips.contains(trip));
   }
 
-  /// New ride data: inferred times into [routeReturns] (re-planning the
-  /// list), the selected journey's buses onto the map.
+  /// New ride data: the journeys take Tramite's times (re-planned around
+  /// them), the selected journey's buses go onto the map.
   void _applyLegRows() {
-    routeReturns = {
-      for (final MapEntry(key: trip, value: r) in _legRows.entries)
-        if (r.inferred) trip: ReturnEstimate(r.departure.certainty!, delay: r.departure.time.difference(r.scheduled)),
-    };
-    final it = selected;
-    if (it == null) {
-      if (to != null) routes = _buildRoutes();
+    final v = variants;
+    if (selected == null || v == null) {
+      if (to != null) {
+        routes = _buildRoutes();
+        _followLegs(); // a bus swapped in is followed too
+      }
       return;
     }
+    // The open journey moves with its buses, keeping the rides chosen.
+    final now = applyLiveTimes(v.current, _liveOf, walks: walkCache, policy: appSettings.walkPolicy);
+    if (!identical(now, v.current)) {
+      variants = TripVariants(now.base!,
+          walks: walkCache, walkSlots: now.walkSlots, choices: now.rideChoices, policy: appSettings.walkPolicy);
+      final swapped = !_sameRides(now, selected!);
+      selected = now;
+      if (swapped) {
+        _followLegs();
+        _loadTripPaths(now);
+      }
+      _drawSelected(fit: false);
+    }
+    final it = selected!;
+    // The bus you're on has moved: its ride starts where it is now.
+    if (identical(now, v.current) && it.transitLegs.any((l) => l.onBoard)) _drawSelected(fit: false);
     final colors = _legColors(it);
     tracker.show({
       for (final l in it.transitLegs)
-        if (_legRows[l.tripId]?.bus case final bus?) l.tripId!: (vehicle: bus, color: colors[l.tripId] ?? _lineColor),
+        if (_legTrips[l.tripId]?.bus case final bus?) l.tripId!: (vehicle: bus, color: colors[l.tripId] ?? _lineColor),
     });
     _drawApproach();
   }
@@ -235,21 +304,24 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// rides) are applied, to re-plan them when new estimates arrive.
   List<Itinerary> _routeItineraries = [];
 
-  /// [routes] from [_routeItineraries] with [routeReturns] applied: late
-  /// (purple) rides moved and connections re-planned, then grouped and
-  /// ranked again; routes that can't make a connection go last.
+  /// [routes] from [_routeItineraries] at Tramite's times ([_liveOf]): rides
+  /// moved and connections re-planned, then grouped and ranked again.
+  /// Journeys whose first bus has gone by are dropped; those that can't
+  /// make a connection go last.
   List<RouteGroup> _buildRoutes() {
     // Each journey is grouped within its own section: a row's swipe options
     // are all as sure as the row (they move when a bus turns gray, red...).
-    if (!routeReturns.values.any((e) => e.certainty == Certainty.estimated)) {
-      return routeSearch.group(_routeItineraries, sectionOf: _journeyKind);
-    }
     final groups = routeSearch.group([
       for (final it in _routeItineraries)
-        applyEstimatedRides(it, routeReturns, walks: walkCache, policy: appSettings.walkPolicy),
+        if (applyLiveTimes(it, _liveOf, walks: walkCache, policy: appSettings.walkPolicy) case final now
+            when !firstRideGone(now, _liveOf))
+          now,
     ], sectionOf: _journeyKind);
     return [...groups.where((g) => !g.best.missedConnection), ...groups.where((g) => g.best.missedConnection)];
   }
+
+  static bool _sameRides(Itinerary a, Itinerary b) =>
+      a.transitLegs.map((l) => l.tripId).join(',') == b.transitLegs.map((l) => l.tripId).join(',');
   Itinerary? selected;
 
   /// Swappable rides of the selected trip; [selected] is its current composition.
@@ -394,6 +466,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _lifecycle.dispose();
     _leaveBrowsing();
     _legTopics.clear();
+    _leaveRide();
     _lineTopics.clear();
     toSearch.dispose();
     fromSearch.dispose();
@@ -698,10 +771,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // Several planner profiles merged and grouped by line sequence,
       // groups ordered by earliest arrival (see RouteSearch).
       // On a bus: every route starts on board (see on_board.dart).
-      final list = switch (from.onBoard) {
-        final ride? => await routeSearch.searchOnBoard(ride, dest.position, toName: dest.name),
-        null => await routeSearch.search(from.position, dest.position, toName: dest.name),
-      };
+      final ride = from.onBoard;
+      if (ride == null) _leaveRide();
+      final list = ride != null
+          ? await routeSearch.searchOnBoard(ride, dest.position, toName: dest.name, live: await _rideLive(ride))
+          : await routeSearch.search(from.position, dest.position, toName: dest.name);
       if (!mounted || to != dest) return;
       setState(() {
         _routeItineraries = [for (final g in list) ...g.options];
@@ -739,13 +813,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   /// Dotted line from each tracked vehicle to the stop where you board it,
-  /// only while it hasn't reached that stop yet.
+  /// only while it hasn't reached that stop yet. Not for the bus you're on.
   Future<void> _drawApproach() async {
     if (!styleReady) return;
     final it = selected;
     final features = <Map<String, dynamic>>[];
     if (it != null) {
       for (final leg in it.transitLegs) {
+        if (leg.onBoard) continue; // you're on it: its ride starts at the bus
         final path = tripPaths[leg.tripId];
         final bus = tracker.buses[leg.tripId];
         if (path == null || bus == null) continue;
@@ -933,6 +1008,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       onBoard: OnBoardRide(
         backendTripId: plannerId,
         tripId: MotisClient.rawTripId(plannerId) ?? plannerId,
+        liveTripId: id,
         line: name,
         mode: info.mode,
         headsign: info.headsign,
@@ -1243,6 +1319,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 
   Color _colorFor(Itinerary it, Leg leg) => hexColor(_colorHexFor(it, leg));
 
+  /// A leg's line on the map. The ride you're on starts at its bus, as
+  /// last seen: what is left of it, shorter as the bus moves on.
+  List<LatLng> _legPoints(Leg l) {
+    final bus = l.onBoard ? _legTrips[l.tripId]?.bus : null;
+    if (bus == null) return l.points;
+    final left = approachPath(tripPaths[l.tripId] ?? l.points, bus.position, l.to);
+    return left.length < 2 ? [bus.position, l.to] : left;
+  }
+
   Future<void> _drawSelected({bool fit = true}) async {
     if (!styleReady) return;
     final it = selected;
@@ -1259,7 +1344,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               'type': 'Feature',
               'geometry': {
                 'type': 'LineString',
-                'coordinates': [for (final p in l.points) [p.longitude, p.latitude]],
+                'coordinates': [for (final p in _legPoints(l)) [p.longitude, p.latitude]],
               },
               'properties': {'walk': !l.transit, 'color': _colorHexFor(it, l)},
             },
@@ -1268,7 +1353,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         'stops',
         _collection([
           for (final l in it.transitLegs) ...[
-            _point(l.from, {'color': _colorHexFor(it, l)}),
+            if (!l.onBoard) _point(l.from, {'color': _colorHexFor(it, l)}), // on board: the bus itself
             _point(l.to, {'color': _colorHexFor(it, l)}),
           ],
         ]));
@@ -1413,11 +1498,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         for (var s = 0; s < v.slotCount; s++)
           if (v.walkIndex(s) != null) v.slotSpan(s),
     ], max: 8);
-    if (!mounted || variants != v) return;
+    if (!mounted || selected == null) return;
+    // Live times may have rebuilt the journey meanwhile: the one open now.
+    v = variants ?? v;
+    final missed = selected!.missedConnection;
     v.refresh();
-    // The real walk turned out too long to make a connection: back to rides.
-    if (!v.feasible) v.restore(v.defaults);
-    setState(() => selected = v.current);
+    // The real walk turned out too long to make a connection: back to rides
+    // (unless the live times already break it: nothing to go back to).
+    if (!v.feasible && !missed) v.restore(v.defaults);
+    setState(() => selected = missed && !v.feasible ? v.current.withMissedConnection() : v.current);
     _syncLegTopics();
     _drawSelected(fit: false);
   }
@@ -1852,7 +1941,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// its way, or waiting while the bus hasn't started.
   Certainty _trackedCertainty(bool realtime, String? tripId) {
     final bus = tripId == null ? null : tracker.buses[tripId]?.vehicle;
-    if (realtime && bus != null && _legRows[tripId] == null) return bus.started ? Certainty.moving : Certainty.waiting;
+    if (realtime && bus != null && _legTrips[tripId] == null) return bus.started ? Certainty.moving : Certainty.waiting;
     return _certainty(realtime, tripId);
   }
 
@@ -2109,6 +2198,17 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return [l.tripTracking(tracker.buses.length, covered), if (feedAge != null) l.tripPositionsAge(feedAge)].join(' · ');
   }
 
+  /// On the bus you're on: how many stops before the one you get off at,
+  /// by where Tramite sees the bus now. Null otherwise (the leg's own count).
+  int? _stopsLeft(Leg l) {
+    final trip = l.onBoard ? _legTrips[l.tripId] : null;
+    final seq = trip?.busSequence;
+    if (trip == null || seq == null) return null;
+    final ahead = trip.stops.indexWhere((s) => s.sequence >= seq);
+    final off = ahead < 0 ? null : trip.visit(l.toStopId, l.scheduledEnd, from: ahead, arrival: true);
+    return off == null ? null : off - ahead;
+  }
+
   List<Widget> _tripSlivers(Itinerary it) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
@@ -2169,6 +2269,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           final wait = l.transit && !l.onBoard ? minutesUntil(l.start) : null; // nothing to catch on board
           final row = LegRow(
             leg: l,
+            stopsLeft: _stopsLeft(l),
             color: _colorFor(it, l),
             bus: tracker.buses[l.tripId],
             waitMinutes: wait,

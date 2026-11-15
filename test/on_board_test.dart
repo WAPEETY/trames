@@ -35,6 +35,7 @@ Itinerary _it(List<Leg> legs) =>
     Itinerary(start: legs.first.start, end: legs.last.end, legs: legs, transfers: legs.where((l) => l.transit).length - 1);
 
 void main() {
+  _liveTests();
   group('OnBoardTrip', () {
     test('stops ahead and where the bus is between the last two', () {
       final t = _trip();
@@ -241,4 +242,72 @@ class _MeterWalks implements WalkRouter {
     final m = distanceMeters(from, to);
     return WalkRoute(duration: Duration(seconds: m.round()), distanceMeters: m, points: [from, to]);
   }
+}
+
+// Tramite's view of the run in _info(): same six stops (sequence 1..6),
+// running [late] minutes behind the timetable, its bus heading to stop
+// [busSeq] and seen at [at].
+TramiteTrip _seen({required int late, int? busSeq, LatLng? at, bool realtime = true}) => TramiteTrip(
+      tripId: '64-raw',
+      backendTripId: 'run64',
+      line: '64',
+      cancelled: false,
+      busSequence: busSeq,
+      started: true,
+      bus: at == null
+          ? null
+          : Vehicle(id: 'v', label: 'v', tripId: '64-raw', routeShortName: '64', position: at, timestamp: _now, stopSequence: busSeq),
+      stops: [
+        for (var i = 0; i < 6; i++)
+          TramiteTripStop(
+            stopId: 's$i', name: 'S$i', position: _pos(i), sequence: i + 1,
+            scheduledArrival: _m(_times[i]), arrival: _m(_times[i] + late),
+            scheduledDeparture: _m(_times[i]), departure: _m(_times[i] + late),
+            realtime: realtime, inferred: false, cancelled: false,
+          ),
+      ],
+    );
+
+void _liveTests() {
+  group('on board with Tramite', () {
+    test('late bus: still before stops the timetable says it passed', () {
+      // The timetable has S1 next (in 2 min); the bus is 9 min late, between S0 and S1... in fact still heading to S0.
+      final gps = LatLng(41.90, 12.5010);
+      final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: 9, busSeq: 1, at: gps));
+      expect(t.remaining.map((s) => s.stopId), ['s0', 's1', 's2', 's3', 's4', 's5']);
+      expect(t.position, gps);
+      expect(t.remaining[0].time, _m(7));
+      expect(t.remaining[2].time, _m(14));
+      final ride = t.rideTo(2);
+      expect((ride.from, ride.intermediateStops, ride.end), (gps, 2, _m(14)));
+    });
+
+    test('early bus: stops it has passed are not offered', () {
+      final gps = LatLng(41.90, 12.50 - 0.0066 * 2.5);
+      final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: -4, busSeq: 4, at: gps));
+      expect(t.remaining.map((s) => s.stopId), ['s3', 's4', 's5']);
+      expect(t.position, gps);
+      expect(t.remaining.first.time, _m(6));
+    });
+
+    test('a time already gone by counts as now, and never goes backwards', () {
+      // Heading to S0, whose predicted time was 2 min ago.
+      final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: 0, busSeq: 1, at: _pos(0)));
+      expect(t.remaining.first.stopId, 's0');
+      expect(t.remaining.first.time, _now);
+      expect(t.remaining[1].time, _m(2));
+    });
+
+    test('Tramite without a live time: the planner\'s times, the bus where the feed says', () {
+      final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: 30, busSeq: 3, at: _pos(1), realtime: false));
+      expect(t.remaining.map((s) => s.stopId), ['s2', 's3', 's4', 's5']);
+      expect(t.remaining.first.time, _m(5));
+    });
+
+    test('no bus seen: Tramite\'s times decide what is ahead', () {
+      final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: 9));
+      expect(t.remaining.first.stopId, 's0', reason: 'S0 is now due at +7');
+      expect(t.position, _pos(0));
+    });
+  });
 }

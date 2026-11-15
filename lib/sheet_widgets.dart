@@ -491,8 +491,18 @@ class WaitIndicator extends StatelessWidget {
 /// reaches the boarding stop (transit legs only).
 class LegRow extends StatelessWidget {
   const LegRow(
-      {super.key, required this.leg, required this.color, this.bus, this.waitMinutes, this.certainty = Certainty.scheduled});
+      {super.key,
+      required this.leg,
+      required this.color,
+      this.bus,
+      this.waitMinutes,
+      this.stopsLeft,
+      this.certainty = Certainty.scheduled});
   final Leg leg;
+
+  /// On the bus you're on: the stops before yours, counted from where the
+  /// bus is now (else the leg's own count, from when it was planned).
+  final int? stopsLeft;
   final Color color;
   final TrackedBus? bus;
   final int? waitMinutes;
@@ -504,7 +514,10 @@ class LegRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
-    final mins = leg.end.difference(leg.start).inMinutes;
+    // On board the ride started when it was planned: what's left counts.
+    final mins = leg.onBoard
+        ? minutesUntil(leg.end).clamp(0, 9999)
+        : leg.end.difference(leg.start).inMinutes;
     final timeStyle = emphasized(context)
         .labelLarge
         .copyWith(color: leg.transit && leg.realtime ? certaintyColor(context, certainty) : cs.onSurface);
@@ -544,7 +557,7 @@ class LegRow extends StatelessWidget {
                     : '${titleCase(leg.fromName)} → ${titleCase(leg.toName)}',
                 style: tt.bodyMedium?.copyWith(color: cs.onSurface)),
             Text(
-              context.l10n.legSummary(leg.intermediateStops, mins, hm(leg.end)),
+              context.l10n.legSummary(stopsLeft ?? leg.intermediateStops, mins, hm(leg.end)),
               style: tt.bodySmall?.copyWith(color: cs.onSurfaceVariant),
             ),
             if (bus != null || leg.realtime) ...[

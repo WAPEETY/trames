@@ -115,12 +115,14 @@ class RouteSearch {
   /// Journeys for someone riding [ride] now (needs an [OnBoardPlanner]):
   /// every journey starts on board. Staying on comes first; getting off is
   /// listed normally only when it clearly pays (rule 2, as for any ride of
-  /// any journey). Throws [OnBoardTripOver] when the ride has no stops left.
-  Future<List<RouteGroup>> searchOnBoard(OnBoardRide ride, LatLng to, {String toName = ''}) async {
+  /// any journey). [live] is Tramite's view of the ride, when it covers it:
+  /// where the bus really is and its times (see [OnBoardTrip]). Throws
+  /// [OnBoardTripOver] when the ride has no stops left.
+  Future<List<RouteGroup>> searchOnBoard(OnBoardRide ride, LatLng to, {String toName = '', TramiteTrip? live}) async {
     final TripPlanner p = planner;
     if (p is! OnBoardPlanner) throw UnsupportedError('This planner cannot plan from a vehicle');
     final onBoard = p as OnBoardPlanner;
-    final trip = OnBoardTrip(ride, await onBoard.liveTrip(ride.backendTripId), now: _clock());
+    final trip = OnBoardTrip(ride, await onBoard.liveTrip(ride.backendTripId), now: _clock(), live: live);
     if (trip.remaining.isEmpty) throw const OnBoardTripOver();
     final cache = walks;
     final stay = cache == null
@@ -137,7 +139,7 @@ class RouteSearch {
     }));
     final stayIt = await stay;
     if (batches.every((b) => b.isEmpty) && stayIt == null && firstError != null) throw firstError!;
-    return _finish([...batches.expand((b) => b), ?stayIt], to, toName);
+    return _finish([...batches.expand((b) => b), ?stayIt], to, toName, riding: trip);
   }
 
   /// Journeys from [from] to [to] ([toName] names the last walk).
@@ -158,7 +160,7 @@ class RouteSearch {
   /// Rule 1 on the alternatives, then the walking rule, then rule 2 on the
   /// journeys as they will be shown (buses replaced by a walk are not
   /// judged), then grouping.
-  Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName) async {
+  Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName, {OnBoardTrip? riding}) async {
     final rides = [for (final it in raw) ...it.transitLegs];
     var all = [for (final it in raw) trimAlternatives(it, rides: rides)];
     final cache = walks, details = trips;
@@ -166,6 +168,7 @@ class RouteSearch {
     if (cache != null && details != null) {
       all = await checkStayingOn(
         all,
+        riding: riding,
         to: to,
         toName: toName,
         runOf: details.trip,

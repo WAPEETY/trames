@@ -45,10 +45,15 @@ class OnBoardRide {
     required this.line,
     required this.mode,
     required this.headsign,
+    this.liveTripId,
   });
 
   /// The planner's id for the run.
   final String backendTripId;
+
+  /// The live service's own id for the run (the bus it was picked from),
+  /// when it has one: where the bus is and its times come from there.
+  final String? liveTripId;
 
   /// Raw GTFS trip_id (see top of file).
   final String tripId;
@@ -124,8 +129,8 @@ class Itinerary {
   /// trip view opens on the same buses; null = the defaults.
   final List<int>? rideChoices;
 
-  /// A ride runs late (the app's estimate) and no bus makes the next
-  /// connection any more: the times shown can't really be made.
+  /// By the live times a ride runs late (or has already gone by) and no
+  /// bus makes the connection any more: the times shown can't really be made.
   final bool missedConnection;
 
   /// Same itinerary, flagged as missing a connection.
@@ -221,6 +226,8 @@ class Leg {
     this.fromStopId,
     this.toStopId,
     this.onBoard = false,
+    this.plannedStart,
+    this.plannedEnd,
   });
 
   /// WALK, BUS, TRAM, SUBWAY, RAIL, ...
@@ -264,15 +271,40 @@ class Leg {
   /// vehicle is now, there's nothing to catch, and it can't be swapped.
   final bool onBoard;
 
+  /// When the planner had this ride leave and arrive, once live times moved
+  /// it (see [at]); null while [start] and [end] are still the planner's.
+  final DateTime? plannedStart;
+  final DateTime? plannedEnd;
+
+  /// The planner's own times, live times aside.
+  DateTime get planned => plannedStart ?? start;
+  DateTime get plannedArrival => plannedEnd ?? end;
+
+  /// The planner's timetable times (its own delay taken off).
+  DateTime get scheduledStart => planned.subtract(Duration(seconds: delaySeconds ?? 0));
+  DateTime get scheduledEnd => plannedArrival.subtract(Duration(seconds: arrivalDelaySeconds ?? delaySeconds ?? 0));
+
   Duration get duration => end.difference(start);
 
   /// Same leg moved in time (used to re-time walks when a ride is swapped).
   Leg movedTo(DateTime newStart) => _copy(start: newStart, end: end.add(newStart.difference(start)));
 
+  /// This ride at its live times: leaving at [liveStart] (null: when the
+  /// planner said) and arriving at [liveEnd] (null: as much later than
+  /// planned as it leaves). Can be applied again and again: the planner's
+  /// times are remembered.
+  Leg at(DateTime? liveStart, [DateTime? liveEnd]) {
+    final from = liveStart ?? planned;
+    var to = liveEnd ?? plannedArrival.add(from.difference(planned));
+    if (to.isBefore(from)) to = from;
+    if (from == start && to == end) return this;
+    return _copy(start: from, end: to, plannedStart: planned, plannedEnd: plannedArrival);
+  }
+
   /// Same leg with a different set of alternatives.
   Leg withAlternatives(List<LegAlternative> alts) => _copy(alternatives: alts);
 
-  Leg _copy({DateTime? start, DateTime? end, List<LegAlternative>? alternatives}) {
+  Leg _copy({DateTime? start, DateTime? end, List<LegAlternative>? alternatives, DateTime? plannedStart, DateTime? plannedEnd}) {
     return Leg(
       mode: mode,
       transit: transit,
@@ -297,6 +329,8 @@ class Leg {
       fromStopId: fromStopId,
       toStopId: toStopId,
       onBoard: onBoard,
+      plannedStart: plannedStart ?? this.plannedStart,
+      plannedEnd: plannedEnd ?? this.plannedEnd,
     );
   }
 }
@@ -487,6 +521,11 @@ class TripStop {
   final bool live;
 
   int? get delaySeconds => time == null || scheduled == null ? null : time!.difference(scheduled!).inSeconds;
+
+  /// Same stop, reached at [t] when its own time is earlier.
+  TripStop notBefore(DateTime t) => time == null || !time!.isBefore(t)
+      ? this
+      : TripStop(name: name, position: position, time: t, scheduled: scheduled, stopId: stopId, live: live);
 }
 
 /// A whole vehicle run: its line, direction, path and every stop.
