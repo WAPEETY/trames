@@ -2,7 +2,7 @@
 
 **Trames** is a public transport app. It shows the stops and buses around you on a map, tells you what's leaving next, and plans journeys using live data wherever it's available.
 
-
+![timetable](screenshots/timetable.png)
 
 ## Features
 
