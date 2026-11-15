@@ -64,14 +64,15 @@ bool firstRideGone(Itinerary it, LiveRide? Function(Leg ride) liveOf) {
 /// planner's when there is none any more; the journey is recomposed (walks
 /// re-timed, connections checked; see [TripVariants]). When a connection
 /// breaks, or a ride is gone, the rides from there on try their other buses
-/// (or walking) and the feasible mix arriving earliest wins; the rides
-/// before stay. With no feasible mix the journey keeps its buses and is
+/// (or walking, within [WalkPolicy.maxRideWalk]) and the feasible mix
+/// arriving earliest wins; the rides before stay. With no feasible mix the journey keeps its buses and is
 /// flagged [Itinerary.missedConnection].
 ///
 ///
-/// With [earlier], a journey that works is still moved to an earlier bus of
-/// the same line when one can be caught (typically one running late, which
-/// the planner counts as left): the rides after it are chosen again for the
+/// With [earlier], a journey that works is still moved to an earlier bus
+/// among a ride's alternatives (its line or another one doing the same
+/// stretch) that the planner counts as left but, running late, can still be
+/// caught (a bus the planner can catch has its own journey): the rides after it are chosen again for the
 /// earliest arrival. It is taken when you arrive sooner, or no later while
 /// leaving at most [WalkPolicy.earlierRideWait] before (that much more waiting on the
 /// way rather than at the start). Not for a journey whose rides the user
@@ -140,6 +141,14 @@ Itinerary applyLiveTimes(
     return rideCount(slot) == 0 ? tv.slotRide(slot) : tv.rideOf(slot, c);
   }
 
+  /// Walking instead of a ride is only tried within the walk the user
+  /// accepts ([WalkPolicy.maxRideWalk]); a walk the journey already had stays.
+  bool allowed(int slot, int variant) {
+    if (!tv.isWalk(slot, variant) || it.walkSlots.contains(slot)) return true;
+    final cap = policy.maxRideWalk;
+    return cap == null || tv.walkDurationOf(slot) <= cap;
+  }
+
   List<int> goneSlots() => [
         for (var s = 0; s < tv.slotCount; s++)
           if (chosen(s) case final ride? when gone(ride)) s,
@@ -147,7 +156,7 @@ Itinerary applyLiveTimes(
   bool ok() => tv.feasible && goneSlots().isEmpty;
   if (!moved && !it.transitLegs.any(gone) && !ok()) return it; // nothing live to re-plan around
   if (ok()) {
-    if (earlier) _takeEarlierRide(tv, ok, chosen, rideCount, maxCombinations, policy.earlierRideWait);
+    if (earlier) _takeEarlierRide(tv, ok, chosen, rideCount, allowed, maxCombinations, policy.earlierRideWait, (clock ?? DateTime.now)());
     return !moved && _sameChoices(tv.current, it) ? it : tv.current;
   }
 
@@ -188,7 +197,7 @@ Itinerary applyLiveTimes(
     }
     final s = free[k];
     for (var v = 0; v < tv.variantCount(s); v++) {
-      search(k + 1, List.of(choice)..[s] = v);
+      if (allowed(s, v)) search(k + 1, List.of(choice)..[s] = v);
     }
   }
 
@@ -206,8 +215,8 @@ bool _sameChoices(Itinerary a, Itinerary b) =>
     a.walkSlots.length == b.walkSlots.length &&
     a.walkSlots.containsAll(b.walkSlots);
 
-/// Moves the working journey of [tv] to an earlier bus of the same line at
-/// the first ride that has one (see [applyLiveTimes]); the rides after it
+/// Moves the working journey of [tv] to an earlier bus, one the planner
+/// counts as left at [now], at the first ride that has one among its variants (see [applyLiveTimes]); the rides after it
 /// take whichever variant arrives first. Leaves [tv] as it was when nothing
 /// is worth it.
 void _takeEarlierRide(
@@ -215,18 +224,19 @@ void _takeEarlierRide(
   bool Function() ok,
   Leg? Function(int slot) chosen,
   int Function(int slot) rideCount,
+  bool Function(int slot, int variant) allowed,
   int maxCombinations,
   Duration wait,
+  DateTime now,
 ) {
   final start = tv.choices;
   final was = tv.current;
-  String line(Leg l) => l.routeShortName ?? l.mode;
   for (var s = 0; s < tv.slotCount; s++) {
     final ride = chosen(s);
     if (ride == null || ride.onBoard) continue;
     final sooner = [
       for (var v = 0; v < rideCount(s); v++)
-        if (line(tv.rideOf(s, v)) == line(ride) && tv.rideOf(s, v).start.isBefore(ride.start)) v,
+        if (tv.rideOf(s, v).planned.isBefore(now) && tv.rideOf(s, v).start.isBefore(ride.start)) v,
     ];
     if (sooner.isEmpty) continue;
     List<int>? best;
@@ -250,7 +260,7 @@ void _takeEarlierRide(
         return;
       }
       for (var v = 0; v < tv.variantCount(k); v++) {
-        search(k + 1, List.of(choice)..[k] = v);
+        if (allowed(k, v)) search(k + 1, List.of(choice)..[k] = v);
       }
     }
 

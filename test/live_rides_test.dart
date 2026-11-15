@@ -1,8 +1,7 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
+import 'package:roma_transit/backend/backend.dart';
 import 'package:roma_transit/backend/live_rides.dart';
-import 'package:roma_transit/backend/models.dart';
-import 'package:roma_transit/backend/tramite.dart';
 import 'package:roma_transit/backend/trip_variants.dart';
 import 'package:roma_transit/backend/walk_rules.dart';
 
@@ -48,6 +47,12 @@ Leg _from(String from, String to, int a, int b, {bool realtime = false, int? del
     points: const [], distanceMeters: 0, tripId: 'a', fromStopId: from, toStopId: to,
     realtime: realtime, delaySeconds: delay, arrivalDelaySeconds: delay);
 
+class _Walk20 implements WalkRouter {
+  @override
+  Future<WalkRoute?> walk(LatLng from, LatLng to) async =>
+      WalkRoute(duration: const Duration(minutes: 20), distanceMeters: 1500, points: [from, to]);
+}
+
 void main() {
   Itinerary apply(Itinerary it, Map<String, int?> at) => applyLiveTimes(it, _live(at), clock: () => _t0);
   String rides(Itinerary it) => it.transitLegs.map((l) => '${l.routeShortName}@${l.start.difference(_t0).inMinutes}').join(' ');
@@ -81,6 +86,19 @@ void main() {
     final r = apply(_trip(), {'a': 12});
     expect(r.missedConnection, isTrue);
     expect(rides(r), '88@12 60@15');
+  });
+
+  test('no bus makes it and the walk is longer than the user accepts: flagged, not walked', () async {
+    final walks = WalkCache(_Walk20());
+    await walks.fetch([(_p, _p)]);
+    Itinerary at(Duration? cap) => applyLiveTimes(_trip(), _live({'a': 12}),
+        walks: walks, clock: () => _t0, policy: WalkPolicy(maxRideWalk: cap));
+    final free = at(null); // any walk: the 60 is walked, 20 minutes
+    expect(rides(free), '88@12');
+    expect(free.missedConnection, isFalse);
+    final some = at(const Duration(minutes: 12));
+    expect(rides(some), '88@12 60@15');
+    expect(some.missedConnection, isTrue);
   });
 
   test('late last ride: arrival moves', () {
@@ -167,6 +185,20 @@ void main() {
           clock: () => now, earlier: true, policy: const WalkPolicy(earlierRideWait: Duration(minutes: 10)));
       expect(rides(strict({'e': 29})), '66@29 3NAV@66'); // 8 sooner
       expect(rides(strict({'e': 21})), '66@37 3NAV@66'); // 16 sooner: leave later
+    });
+
+    test('another line doing the same stretch: taken too', () {
+      final early60 = LegAlternative([_walk(8, 9), _ride('60', 'e', 9, 32), _walk(32, 34)]);
+      final r = list(trip(first: [early60], second: [bus19(50)]), {'e': 21});
+      expect(rides(r), '60@21 19BUS@50');
+      expect(r.end, _m(59));
+    });
+
+    test('an earlier bus the planner can still catch: left to its own journey', () {
+      final onTime = LegAlternative([_walk(24, 25), _ride('66', 'e', 25, 48), _walk(48, 50)]);
+      final it = trip(first: [onTime], second: [bus19(52)]);
+      expect(list(it, {}), same(it));
+      expect(rides(list(it, {'e': 26})), '66@37 3NAV@66');
     });
 
     test('it has gone by: not taken', () {
