@@ -129,8 +129,9 @@ class Itinerary {
   /// trip view opens on the same buses; null = the defaults.
   final List<int>? rideChoices;
 
-  /// By the live times a ride runs late (or has already gone by) and no
-  /// bus makes the connection any more: the times shown can't really be made.
+  /// The times shown can't really be made: by the live times a ride runs
+  /// late (or has already gone by) and no bus makes the connection any
+  /// more, or you can't reach the first stop in time ([lateForFirstRide]).
   final bool missedConnection;
 
   /// Same itinerary, flagged as missing a connection.
@@ -153,6 +154,16 @@ class Itinerary {
       );
 
   bool get walkOnly => transitLegs.isEmpty;
+
+  /// You can't reach the first stop in time any more: to catch the first
+  /// ride you should have left more than [slack] ago, and it hasn't left
+  /// yet. (Never for the ride you're already on.)
+  bool lateForFirstRide(DateTime now, {Duration slack = const Duration(minutes: 1)}) {
+    final first = transitLegs.firstOrNull;
+    if (first == null || first.onBoard) return false;
+    final limit = now.subtract(slack);
+    return start.isBefore(limit) && !first.start.isBefore(limit);
+  }
 
   Duration get duration => end.difference(start);
   Iterable<Leg> get transitLegs => legs.where((l) => l.transit);

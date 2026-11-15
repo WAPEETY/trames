@@ -26,6 +26,8 @@ class _FakePlanner implements TripPlanner {
 }
 
 void main() {
+  _reachTests();
+  _missedTests();
   test('merges profiles, dedupes the same trip, groups by line sequence and tags', () async {
     final fast = _it([_walk(0, 4), _ride('211', 'a', 4, 10), _ride('MEB', 'b', 12, 30), _walk(30, 34)]);
     final fastAgainMoreWalk = _it([_walk(0, 8), _ride('211', 'a', 4, 10), _ride('MEB', 'b', 12, 30), _walk(30, 40)]);
@@ -63,4 +65,34 @@ class _ThrowingPlanner implements TripPlanner {
     if (okResult != null && _call++ == 0) return okResult!;
     throw Exception('boom');
   }
+}
+
+void _reachTests() {
+  // _t0 is 5 min from now.
+  test('first bus still coming but its stop out of reach: listed as missed, not dropped', () {
+    final search = RouteSearch(_FakePlanner(const []));
+    // An 8 min walk to a bus leaving in 5: you should have left 3 min ago.
+    final late = _it([_walk(-8, 0), _ride('60', 'a', 0, 20), _walk(20, 22)]);
+    // Its bus left 6 min ago: gone.
+    final gone = _it([_walk(-13, -11), _ride('61', 'b', -11, 10), _walk(10, 12)]);
+    final fine = _it([_walk(-4, 0), _ride('62', 'c', 0, 30), _walk(30, 32)]);
+    final groups = search.group([late, gone, fine]);
+    expect({for (final g in groups) g.signature: g.best.missedConnection}, {'60': true, '62': false});
+    expect(late.lateForFirstRide(DateTime.now()), isTrue);
+    expect(fine.lateForFirstRide(DateTime.now()), isFalse);
+    expect(gone.lateForFirstRide(DateTime.now()), isFalse);
+  });
+}
+
+void _missedTests() {
+  test('a missed journey is a row of its own and never the fastest', () {
+    final search = RouteSearch(_FakePlanner(const []));
+    final missed = _it([_walk(0, 4), _ride('60', 'a', 4, 20), _walk(20, 22)]).withMissedConnection();
+    final next = _it([_walk(10, 14), _ride('60', 'b', 14, 30), _walk(30, 32)]);
+    final groups = search.group([missed, next], sectionOf: (it) => it.missedConnection ? 'live|missed' : 'live');
+    expect(groups.length, 2);
+    final ok = groups.firstWhere((g) => !g.best.missedConnection);
+    expect(ok.tags, contains(RouteTag.fastest));
+    expect(groups.firstWhere((g) => g.best.missedConnection).tags, isEmpty);
+  });
 }

@@ -348,6 +348,12 @@ class TramiteTripStop {
 
   /// The trip skips this stop.
   final bool cancelled;
+
+  /// Its times can be believed: within 12 hours of the timetable. Further
+  /// is a feed error (Rome's has had times on the wrong day), not a delay.
+  bool get plausible =>
+      arrival.difference(scheduledArrival).abs() <= const Duration(hours: 12) &&
+      departure.difference(scheduledDeparture).abs() <= const Duration(hours: 12);
 }
 
 /// A whole trip from Tramite: its bus and its times at every stop.

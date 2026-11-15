@@ -307,9 +307,14 @@ class RouteSearch {
   List<RouteGroup> group(Iterable<Itinerary> all, {String Function(Itinerary)? sectionOf}) {
     final now = _clock().subtract(const Duration(minutes: 1));
     final unique = <String, Itinerary>{};
-    for (final it in all) {
-      // Gone, unless it starts on the vehicle you're already on.
-      if (it.start.isBefore(now) && !(it.legs.firstOrNull?.onBoard ?? false)) continue;
+    for (var it in all) {
+      // Its first ride has left: gone (unless it starts on the vehicle
+      // you're already on). Still to leave, but you can't be at its stop in
+      // time: listed as a missed connection, its next bus a swipe away.
+      if (it.start.isBefore(now) && !(it.legs.firstOrNull?.onBoard ?? false)) {
+        if (!it.lateForFirstRide(_clock())) continue;
+        it = it.withMissedConnection();
+      }
       // Same lines on the same vehicles = same trip, whatever the walking
       // around it. Walking the whole way is one option, whenever you leave.
       final key = it.walkOnly
@@ -353,8 +358,8 @@ class RouteSearch {
     ]..sort((a, b) => _byArrival(a.best, b.best));
     if (result.isEmpty) return result;
 
-    // Tags describe the journeys listed normally.
-    final shown = result.where((g) => g.hiddenBecause == null).toList();
+    // Tags describe the journeys listed normally that can be made.
+    final shown = result.where((g) => g.hiddenBecause == null && !g.best.missedConnection).toList();
     shown.firstOrNull?.tags.add(RouteTag.fastest);
     final transit = shown.where((g) => !g.isWalk).toList();
     if (transit.isNotEmpty) {

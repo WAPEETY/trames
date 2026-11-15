@@ -45,7 +45,8 @@ const _walkDetour = 1.3;
 /// With [live] (Tramite's view of the run) nothing is guessed: the bus is
 /// where its GPS says, the stops ahead start at the one the feed says it's
 /// at or heading to, and each stop's time is Tramite's when it has a live
-/// one, else the planner's (its own live time, or the timetable). Without
+/// one (and a believable one, see [TramiteTripStop.plausible]), else the
+/// planner's (its own live time, or the timetable). Without
 /// it, or where it says nothing, the stops ahead are those whose time is
 /// still to come and the bus is placed between two stops by their times.
 ///
@@ -68,7 +69,7 @@ class OnBoardTrip {
         : [
             for (var i = 0; i < info.stops.length; i++)
               switch (match[i]) {
-                final m? when m.realtime || (m.inferred && !info.stops[i].live) => TripStop(
+                final m? when m.plausible && (m.realtime || (m.inferred && !info.stops[i].live)) => TripStop(
                     name: info.stops[i].name,
                     position: info.stops[i].position,
                     stopId: info.stops[i].stopId,

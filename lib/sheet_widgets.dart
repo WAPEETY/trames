@@ -11,6 +11,34 @@ Color hexColor(String hex) => Color(int.parse('FF${hex.substring(1)}', radix: 16
 
 String hm(DateTime t) => '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
 
+/// Why a journey's times can't be made (see [Itinerary.missedConnection]):
+/// a warning, whatever its buses. [live]: every ride has a live time, so
+/// the connection is missed, not just likely to be.
+class MissedWarning extends StatelessWidget {
+  const MissedWarning(this.it, {super.key, required this.live});
+  final Itinerary it;
+  final bool live;
+
+  @override
+  Widget build(BuildContext context) {
+    final l = context.l10n;
+    final color = Theme.of(context).colorScheme.error;
+    return Row(children: [
+      Icon(Icons.warning_amber_rounded, size: 14, color: color),
+      const SizedBox(width: 4),
+      Flexible(
+        child: Text(
+            it.lateForFirstRide(DateTime.now())
+                ? l.tooLateForFirstStop
+                : live
+                    ? l.missedConnectionLive
+                    : l.missedConnectionWarning,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(color: color)),
+      ),
+    ]);
+  }
+}
+
 int minutesUntil(DateTime t) => (t.difference(DateTime.now()).inSeconds / 60).round();
 
 /// "now" / "in 5 min".
@@ -416,14 +444,7 @@ class ItineraryRow extends StatelessWidget {
             times,
             if (it.missedConnection) ...[
               const SizedBox(height: 2),
-              Row(children: [
-                Icon(certaintyIcon(Certainty.estimated), size: 14, color: certaintyColor(context, Certainty.estimated)),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: Text(context.l10n.missedConnectionWarning,
-                      style: tt.labelMedium?.copyWith(color: certaintyColor(context, Certainty.estimated))),
-                ),
-              ]),
+              MissedWarning(it, live: certainties.every((c) => c == Certainty.moving || c == Certainty.waiting)),
             ],
             const SizedBox(height: 10),
             // Wraps inside the left column, so it never runs under the arrival time.

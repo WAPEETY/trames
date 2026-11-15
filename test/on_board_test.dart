@@ -304,6 +304,21 @@ void _liveTests() {
       expect(t.remaining.first.time, _m(5));
     });
 
+    test('one stop with a time on the wrong day does not drag the others', () {
+      final seen = _seen(late: 3, busSeq: 2, at: _pos(0));
+      final bad = seen.stops[2];
+      seen.stops[2] = TramiteTripStop(
+          stopId: bad.stopId, name: bad.name, position: bad.position, sequence: bad.sequence,
+          scheduledArrival: bad.scheduledArrival, arrival: bad.arrival.add(const Duration(days: 1)),
+          scheduledDeparture: bad.scheduledDeparture, departure: bad.departure.add(const Duration(days: 1)),
+          realtime: true, inferred: false, cancelled: false);
+      final t = OnBoardTrip(_ride, _info(), now: _now, live: seen);
+      expect(t.remaining.map((s) => s.stopId), ['s1', 's2', 's3', 's4', 's5']);
+      expect(t.remaining[1].time, _m(5), reason: 'the planner\'s time for the bad stop');
+      expect(t.remaining[2].time, _m(13));
+      expect(t.remaining.last.time, _m(23));
+    });
+
     test('no bus seen: Tramite\'s times decide what is ahead', () {
       final t = OnBoardTrip(_ride, _info(), now: _now, live: _seen(late: 9));
       expect(t.remaining.first.stopId, 's0', reason: 'S0 is now due at +7');

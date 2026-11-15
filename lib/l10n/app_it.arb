@@ -41,6 +41,8 @@
 
   "itineraryWalk": "A piedi",
   "itineraryLeave": "Parti {when}",
+  "tooLateForFirstStop": "Non fai in tempo ad arrivare alla fermata",
+  "missedConnectionLive": "Coincidenza persa",
   "missedConnectionWarning": "Un bus è in ritardo: coincidenza probabilmente persa",
   "arrive": "arrivo",
 

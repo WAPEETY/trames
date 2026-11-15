@@ -307,7 +307,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// [routes] from [_routeItineraries] at Tramite's times ([_liveOf]): rides
   /// moved and connections re-planned, then grouped and ranked again.
   /// Journeys whose first bus has gone by are dropped; those that can't
-  /// make a connection go last.
+  /// make a connection go last (in their section).
   List<RouteGroup> _buildRoutes() {
     // Each journey is grouped within its own section: a row's swipe options
     // are all as sure as the row (they move when a bus turns gray, red...).
@@ -316,7 +316,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         if (applyLiveTimes(it, _liveOf, walks: walkCache, policy: appSettings.walkPolicy) case final now
             when !firstRideGone(now, _liveOf))
           now,
-    ], sectionOf: _journeyKind);
+      // A missed journey is a row of its own, so the next buses of its
+      // lines keep theirs (and their place in the section).
+    ], sectionOf: (it) => it.missedConnection ? '${_journeyKind(it)}|missed' : _journeyKind(it));
     return [...groups.where((g) => !g.best.missedConnection), ...groups.where((g) => g.best.missedConnection)];
   }
 
@@ -1923,11 +1925,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   ///    the metro counts as live (no feed, but frequent and reliable);
   ///  * predicted: some ride's time is our estimate (red, purple);
   ///  * scheduled: the rest (some ride is timetable only).
+  /// A journey that misses a connection stays where its rides put it (the
+  /// section says how sure the times are, not whether they can be made).
   String _routeKind(RouteGroup g) => _journeyKind(g.best);
 
   String _journeyKind(Itinerary it) {
     if (it.walkOnly) return 'walk';
-    if (it.missedConnection) return 'predicted';
     final sure = [
       for (final l in it.transitLegs) l.mode == 'SUBWAY' ? Certainty.moving : _certainty(l.realtime, l.tripId),
     ];
@@ -2252,10 +2255,18 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       SliverToBoxAdapter(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(24, 0, 24, 12),
-          child: Text(
-            _tripStatus(it, feedAge),
-            style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant),
-          ),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text(
+              _tripStatus(it, feedAge),
+              style: tt.labelMedium?.copyWith(color: cs.onSurfaceVariant),
+            ),
+            // Its times can't be made any more (a missed connection, or the
+            // first stop out of reach): the next bus is a swipe away.
+            if (it.missedConnection || it.lateForFirstRide(DateTime.now())) ...[
+              const SizedBox(height: 4),
+              MissedWarning(it, live: _journeyKind(it) == 'live'),
+            ],
+          ]),
         ),
       ),
       M3EList.sliver(

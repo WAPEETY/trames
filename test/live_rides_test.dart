@@ -153,6 +153,9 @@ void main() {
       // Getting off at A: the visit after boarding, not the first stop.
       expect(liveRideFor(_from('B', 'A', 10, 30), _tripOf(late: 6))!.end, _m(36));
     });
+    test('a time on the wrong day is a feed error: not used', () {
+      expect(liveRideFor(ride, _tripOf(late: 24 * 60 + 5)), isNull);
+    });
     test('another run of the line (timetable far from the planner\'s) is ignored', () {
       expect(liveRideFor(_from('B', 'C', 25, 55), _tripOf(late: 6)), isNull);
     });

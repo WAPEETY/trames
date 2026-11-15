@@ -24,7 +24,8 @@ const _sameRun = Duration(minutes: 3);
 ///  * only the planner has a live time: the planner's;
 ///  * neither: Tramite's inferred time (a known bus should run it) when
 ///    there is one, else the timetable.
-/// A stop the trip calls at twice (loop lines) is taken at the visit the
+/// A time more than 12 hours from the timetable is a feed error and is
+/// not used. A stop the trip calls at twice (loop lines) is taken at the visit the
 /// planner means, by its timetable time. Null when the planner's times
 /// stand.
 LiveRide? liveRideFor(Leg leg, TramiteTrip? trip) {
@@ -35,7 +36,7 @@ LiveRide? liveRideFor(Leg leg, TramiteTrip? trip) {
     final seq = trip.busSequence;
     final ahead = seq == null ? 0 : trip.stops.indexWhere((s) => s.sequence >= seq);
     final a = ahead < 0 ? null : trip.visit(leg.toStopId, leg.scheduledEnd, from: ahead, arrival: true);
-    return a != null && trip.stops[a].realtime ? LiveRide(end: trip.stops[a].arrival) : null;
+    return a != null && trip.stops[a].realtime && trip.stops[a].plausible ? LiveRide(end: trip.stops[a].arrival) : null;
   }
   final b = trip.visit(leg.fromStopId, leg.scheduledStart);
   if (b == null) return null;
@@ -44,7 +45,7 @@ LiveRide? liveRideFor(Leg leg, TramiteTrip? trip) {
   if (trip.cancelled || board.cancelled || trip.passed(board)) return const LiveRide(gone: true);
   final a = trip.visit(leg.toStopId, leg.scheduledEnd, from: b + 1, arrival: true);
   final alight = a == null ? null : trip.stops[a];
-  bool usable(TramiteTripStop s) => s.realtime || (s.inferred && !leg.realtime);
+  bool usable(TramiteTripStop s) => s.plausible && (s.realtime || (s.inferred && !leg.realtime));
   final start = usable(board) ? board.departure : null;
   final end = alight != null && usable(alight) ? alight.arrival : null;
   return start == null && end == null ? null : LiveRide(start: start, end: end);

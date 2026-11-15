@@ -48,6 +48,8 @@
   "itineraryWalk": "Walk",
   "itineraryLeave": "Leave {when}",
   "@itineraryLeave": {"description": "'when' is 'now' or 'in 5 min'.", "placeholders": {"when": {"type": "String"}}},
+  "tooLateForFirstStop": "You can't reach the stop in time",
+  "missedConnectionLive": "Missed connection",
   "missedConnectionWarning": "A bus runs late: likely misses a connection",
   "arrive": "arrive",
 
