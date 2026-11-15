@@ -4,6 +4,7 @@ import 'package:roma_transit/backend/live_rides.dart';
 import 'package:roma_transit/backend/models.dart';
 import 'package:roma_transit/backend/tramite.dart';
 import 'package:roma_transit/backend/trip_variants.dart';
+import 'package:roma_transit/backend/walk_rules.dart';
 
 final _t0 = DateTime(2026, 11, 13, 8);
 DateTime _m(int min) => _t0.add(Duration(minutes: min));
@@ -120,6 +121,68 @@ void main() {
     final none = apply(_trip(), {'a': null});
     expect(none.missedConnection, isTrue);
     expect(firstRideGone(none, _live({'a': null})), isTrue);
+  });
+
+  group('an earlier bus that runs late', () {
+    // Now is minute 20. Planned: walk 36-37, 66 37-60, walk 60-62, 3NAV 66-73,
+    // walk 73-74. The 66 before it was due at 9: left, by the timetable.
+    final now = _m(20);
+    LegAlternative early66() => LegAlternative([_walk(8, 9), _ride('66', 'e', 9, 32), _walk(32, 34)]);
+    LegAlternative later66() => LegAlternative([_walk(39, 40), _ride('66', 'l', 40, 63), _walk(63, 65)]);
+    Itinerary trip({List<LegAlternative> first = const [], List<LegAlternative> second = const []}) => Itinerary(
+          start: _m(36),
+          end: _m(74),
+          transfers: 1,
+          legs: [
+            _walk(36, 37),
+            _ride('66', 'n', 37, 60, alts: first),
+            _walk(60, 62),
+            _ride('3NAV', 'x', 66, 73, alts: second),
+            _walk(73, 74),
+          ],
+        );
+    Itinerary list(Itinerary it, Map<String, int?> at) =>
+        applyLiveTimes(it, _live(at), clock: () => now, earlier: true);
+    LegAlternative bus19(int a) => LegAlternative([_walk(a - 4, a - 2), _ride('19BUS', 'y', a, a + 8), _walk(a + 8, a + 9)]);
+
+    test('no live time for it: gone, the journey stands', () {
+      final it = trip(first: [early66()]);
+      expect(list(it, {}), same(it));
+    });
+
+    test('still to come: taken, and the next ride moves earlier too', () {
+      final r = list(trip(first: [early66()], second: [bus19(50)]), {'e': 21});
+      expect(rides(r), '66@21 19BUS@50');
+      expect(r.start, _m(20));
+      expect(r.end, _m(59));
+      expect(r.missedConnection, isFalse);
+      // The journey view reopens on the same buses.
+      final again = TripVariants(r.base!, choices: r.rideChoices, clock: () => now).current;
+      expect(rides(again), '66@21 19BUS@50');
+    });
+
+    test('same arrival: taken when you leave up to the policy\'s wait sooner', () {
+      expect(rides(list(trip(first: [early66()]), {'e': 21})), '66@21 3NAV@66'); // leaves 20, 16 sooner
+      Itinerary strict(Map<String, int?> at) => applyLiveTimes(trip(first: [early66()]), _live(at),
+          clock: () => now, earlier: true, policy: const WalkPolicy(earlierRideWait: Duration(minutes: 10)));
+      expect(rides(strict({'e': 29})), '66@29 3NAV@66'); // 8 sooner
+      expect(rides(strict({'e': 21})), '66@37 3NAV@66'); // 16 sooner: leave later
+    });
+
+    test('it has gone by: not taken', () {
+      expect(rides(list(trip(first: [early66()]), {'e': null})), '66@37 3NAV@66');
+    });
+
+    test('an open journey keeps its rides', () {
+      final it = trip(first: [early66()], second: [bus19(50)]);
+      expect(rides(applyLiveTimes(it, _live({'e': 21}), clock: () => now)), '66@37 3NAV@66');
+      // The later 66 was picked before the late one could be caught: still it.
+      final v = TripVariants(trip(first: [early66(), later66()]), clock: () => now);
+      v.choose(0, 1);
+      expect(rides(v.current), '66@40 3NAV@66');
+      final r = applyLiveTimes(v.current, _live({'e': 21}), clock: () => now);
+      expect(rides(r), '66@40 3NAV@66');
+    });
   });
 
   group('liveRideFor', () {

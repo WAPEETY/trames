@@ -151,6 +151,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   }
 
   /// What Tramite says about a ride of a journey: its times, or that it's gone.
+  /// Trips followed at once for the journeys (a Tramite stream takes 200
+  /// topics, boards and map buses included).
+  static const _maxLegTopics = 150;
+
   LiveRide? _liveOf(Leg ride) => liveRideFor(ride, _legTrips[ride.tripId]);
 
   /// Board rows from Transitous (stops Tramite doesn't cover), and from
@@ -203,17 +207,29 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   /// those of the journeys as listed. Rides Tramite doesn't cover keep
   /// Transitous's data.
   void _followLegs() {
-    final legs = selected?.transitLegs ??
+    final rides = selected?.transitLegs.toList() ??
         [
           for (final it in _routeItineraries) ...it.transitLegs,
           for (final g in routes)
             for (final it in g.options) ...it.transitLegs,
         ];
+    // And the buses each ride could swap to: an earlier one the planner
+    // counts as left may still be caught, a later one is the fallback when
+    // a connection breaks. After the rides themselves, as many as the
+    // stream has room for.
+    final legs = [
+      ...rides,
+      for (final it in selected == null ? _routeItineraries : [selected!.base ?? selected!])
+        for (final l in it.transitLegs)
+          for (final a in l.alternatives) a.ride,
+    ];
     final wanted = <String, void Function(Object?)>{};
     final trips = <String>{};
     for (final l in legs) {
       final stop = l.fromStopId, trip = l.backendTripId, raw = l.tripId, prefix = tramite.prefixOf(l.backendTripId);
-      if (trip == null || raw == null || prefix == null || !trips.add(raw)) continue;
+      if (trip == null || raw == null || prefix == null || trips.contains(raw)) continue;
+      if (trips.length >= _maxLegTopics) break;
+      trips.add(raw);
       final line = l.routeShortName;
       // The line and a stop of the ride: to find the run when the planner's
       // trip id is from another timetable version.
@@ -335,7 +351,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     // are all as sure as the row (they move when a bus turns gray, red...).
     final groups = routeSearch.group([
       for (final it in _routeItineraries)
-        if (applyLiveTimes(it, _liveOf, walks: walkCache, policy: appSettings.walkPolicy) case final now
+        if (applyLiveTimes(it, _liveOf, walks: walkCache, policy: appSettings.walkPolicy, earlier: true) case final now
             when !firstRideGone(now, _liveOf))
           now,
       // A missed journey is a row of its own, so the next buses of its

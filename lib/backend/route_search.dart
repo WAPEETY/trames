@@ -182,8 +182,10 @@ class RouteSearch {
   }
 
   /// Keeps only alternatives that board and get off near the planned ride's
-  /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]) and that haven't
-  /// left yet.
+  /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]). Those the
+  /// planner says have left stay: a bus running late may still be caught,
+  /// and only its live time tells (see [applyLiveTimes]; [TripVariants]
+  /// offers a ride only while it can be reached).
   ///
   /// Rule 1: right after a ride on line X, an alternative on X is pointless
   /// when [rides] (every ride of every journey found) include a direct X
@@ -192,7 +194,6 @@ class RouteSearch {
   /// Without such a ride (e.g. the first X ends here) it's a real option.
   Itinerary trimAlternatives(Itinerary it, {Iterable<Leg> rides = const []}) {
     final max = policy.maxAlternativeStopDistanceMeters;
-    final now = _clock();
     var changed = false;
     String line(Leg l) => l.routeShortName ?? l.mode;
     bool near(LatLng a, LatLng b) => distanceMeters(a, b) <= max;
@@ -214,8 +215,7 @@ class RouteSearch {
                 rides.any((d) => line(d) == line(prev) && near(d.from, prev.from) && near(d.to, l.to));
             final keep = [
               for (final a in l.alternatives)
-                if (a.reachableFrom(now) &&
-                    !(stayOnWorks && a.line == line(prev)) &&
+                if (!(stayOnWorks && a.line == line(prev)) &&
                     near(a.ride.from, l.from) &&
                     near(a.ride.to, l.to))
                   a,

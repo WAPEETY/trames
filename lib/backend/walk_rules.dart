@@ -16,7 +16,14 @@ class WalkPolicy {
     this.maxAlternativeStopDistanceMeters = 300,
     this.maxRideWalk,
     this.maxStayOnWalk = const Duration(minutes: 10),
+    this.earlierRideWait = const Duration(minutes: 30),
   });
+
+  /// An earlier bus that gets you there no sooner is still taken when you
+  /// leave at most this much before: that much more waiting on the way,
+  /// rather than leaving later to make the connection exactly. (One that
+  /// gets you there sooner is always taken; see applyLiveTimes.)
+  final Duration earlierRideWait;
 
   /// Staying on a bus "takes you there" when the walk from its stop nearest
   /// the destination is at most this long (see checkStayingOn).

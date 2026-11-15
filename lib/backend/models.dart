@@ -67,7 +67,7 @@ class OnBoardRide {
 class PlanOptions {
   const PlanOptions({
     this.searchWindowMinutes = 30,
-    this.legAlternatives = 3,
+    this.legAlternatives = 6,
     this.maxTransfers,
     this.maxWalkMinutes,
     this.extraTransferMinutes,
