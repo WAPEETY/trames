@@ -194,11 +194,14 @@ void main() {
       expect(r.end, _m(59));
     });
 
-    test('an earlier bus the planner can still catch: left to its own journey', () {
+    test('an earlier bus on time, same arrival: taken (the planner would leave later)', () {
       final onTime = LegAlternative([_walk(24, 25), _ride('66', 'e', 25, 48), _walk(48, 50)]);
-      final it = trip(first: [onTime], second: [bus19(52)]);
-      expect(list(it, {}), same(it));
-      expect(rides(list(it, {'e': 26})), '66@37 3NAV@66');
+      final r = list(trip(first: [onTime]), {});
+      expect(rides(r), '66@25 3NAV@66');
+      expect(r.start, _m(24));
+      expect(r.end, _m(74));
+      // And the next ride moves earlier when one fits.
+      expect(rides(list(trip(first: [onTime], second: [bus19(52)]), {})), '66@25 19BUS@52');
     });
 
     test('it has gone by: not taken', () {
@@ -214,6 +217,89 @@ void main() {
       expect(rides(v.current), '66@40 3NAV@66');
       final r = applyLiveTimes(v.current, _live({'e': 21}), clock: () => now);
       expect(rides(r), '66@40 3NAV@66');
+    });
+  });
+
+  group('the surest buses', () {
+    // Now is minute 0. Planned: walk 9-10, 66 'g' 10-30 (timetable), walk
+    // 30-32, 88 'h' 40-50, walk 50-51.
+    LegAlternative alt(String line, String trip, int a) =>
+        LegAlternative([_walk(a - 1, a), _ride(line, trip, a, a + 20), _walk(a + 20, a + 22)]);
+    Itinerary trip(List<LegAlternative> first) => Itinerary(
+          start: _m(9),
+          end: _m(51),
+          transfers: 1,
+          legs: [_walk(9, 10), _ride('66', 'g', 10, 30, alts: first), _walk(30, 32), _ride('88', 'h', 40, 50), _walk(50, 51)],
+        );
+    // Sureness by trip: 2 live, 1 estimated, else timetable.
+    Itinerary pick(Itinerary it, Map<String, int> sure, {bool surest = true, bool earlier = true}) => applyLiveTimes(
+        it, (_) => null,
+        clock: () => _t0, earlier: earlier, surest: surest, sureness: (l) => sure[l.tripId] ?? 0);
+
+    test('a live bus of the line a little later: taken over the timetable one', () {
+      final it = trip([alt('66', 'live', 14)]);
+      expect(rides(pick(it, {'live': 2})), '66@14 88@40');
+      // The planner's own version keeps its bus: both get listed.
+      expect(pick(it, {'live': 2}, surest: false), same(it));
+    });
+
+    test('live over estimated over timetable, whatever the line', () {
+      final it = trip([alt('60', 'est', 12), alt('60', 'live', 16)]);
+      expect(rides(pick(it, {'est': 1, 'live': 2})), '60@16 88@40');
+      expect(rides(pick(it, {'est': 1})), '60@12 88@40');
+    });
+
+    test('nothing surer, or the surer bus breaks the connection: unchanged', () {
+      final it = trip([alt('66', 'x', 14)]);
+      expect(pick(it, {}), same(it));
+      final late = trip([alt('66', 'live', 25)]); // arrives 45, the 88 leaves at 40
+      expect(pick(late, {'live': 2}), same(late));
+    });
+
+    test('walking is never the surer choice', () async {
+      final walks = WalkCache(_Walk20());
+      await walks.fetch([(_p, _p)]);
+      final it = trip(const []);
+      expect(applyLiveTimes(it, (_) => null, walks: walks, clock: () => _t0, surest: true, earlier: true, sureness: (_) => 0),
+          same(it));
+    });
+
+    test('the earlier-bus rule never moves onto a less sure bus', () {
+      // Planned on the live 66 at 10; a timetable 66 at 5 gets there no later.
+      final it = trip([alt('66', 'grey', 5)]);
+      expect(pick(it, {'g': 2, 'h': 2}, surest: false), same(it));
+      // As sure as the planned one: taken.
+      expect(rides(pick(it, {'g': 2, 'h': 2, 'grey': 2}, surest: false)), '66@5 88@40');
+    });
+  });
+
+  group('liveJourneys', () {
+    // Now is minute 0. Journey A: 60 'a1' 10-30, walk, 19 'b1' 35-45.
+    // Journey B: 60 'a2' 30-50, walk, 19 'b2' 55-65; the 60 'a1' is an
+    // alternative of its first ride.
+    Itinerary two(String t1, int a, String t2, int b, {List<LegAlternative> first = const []}) => Itinerary(
+          start: _m(a - 1),
+          end: _m(b + 11),
+          transfers: 1,
+          legs: [
+            _walk(a - 1, a),
+            _ride('60', t1, a, a + 20, alts: first),
+            _walk(a + 20, a + 22),
+            _ride('19', t2, b, b + 10),
+            _walk(b + 10, b + 11),
+          ],
+        );
+    final early60 = LegAlternative([_walk(9, 10), _ride('60', 'a1', 10, 30), _walk(30, 32)]);
+    List<String> list(List<Itinerary> its) => [
+          for (final it in liveJourneys(its, (_) => null, clock: () => _t0)) '${rides(it)} ${it.end.difference(_t0).inMinutes}',
+        ];
+
+    test('leaving earlier for the same arrival: only when no journey from then arrives sooner', () {
+      final b = two('a2', 30, 'b2', 55, first: [early60]);
+      // Alone: the earlier 60 is taken (20 minutes sooner, same arrival).
+      expect(list([b]), ['60@10 19@55 66']);
+      // With journey A (same 60, arrives at 46): B keeps its later departure.
+      expect(list([two('a1', 10, 'b1', 35), b]), ['60@10 19@35 46', '60@30 19@55 66']);
     });
   });
 

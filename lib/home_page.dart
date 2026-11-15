@@ -193,6 +193,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   Certainty _certainty(bool realtime, String? tripId) =>
       (tripId == null ? null : _legTrips[tripId])?.certainty ?? certaintyOf(realtime: realtime, tripId: tripId);
 
+  /// How sure a ride's bus is, for choosing among buses: live (on its way
+  /// or waiting to leave; the metro counts as live), estimated, timetable.
+  int _sureness(Leg l) => switch (l.mode == 'SUBWAY' ? Certainty.moving : _certainty(l.realtime, l.tripId)) {
+        Certainty.moving || Certainty.waiting => 2,
+        Certainty.estimated || Certainty.returning => 1,
+        Certainty.scheduled => 0,
+      };
+
   Certainty _depCertainty(Departure d) => d.certainty ?? _certainty(d.realtime, d.tripId);
 
   /// Follows, through Tramite, the rides of the shown journeys (the
@@ -349,14 +357,16 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   List<RouteGroup> _buildRoutes() {
     // Each journey is grouped within its own section: a row's swipe options
     // are all as sure as the row (they move when a bus turns gray, red...).
-    final groups = routeSearch.group([
-      for (final it in _routeItineraries)
-        if (applyLiveTimes(it, _liveOf, walks: walkCache, policy: appSettings.walkPolicy, earlier: true) case final now
-            when !firstRideGone(now, _liveOf))
-          now,
+    final groups = routeSearch.group(
+      // Each journey at its live times: on an earlier bus when that pays,
+      // and on the surest buses its rides can swap to (live, then
+      // estimated, then timetable) when those differ; both are listed,
+      // each in its section.
+      liveJourneys(_routeItineraries, _liveOf, walks: walkCache, policy: appSettings.walkPolicy, sureness: _sureness),
       // A missed journey is a row of its own, so the next buses of its
       // lines keep theirs (and their place in the section).
-    ], sectionOf: (it) => it.missedConnection ? '${_journeyKind(it)}|missed' : _journeyKind(it));
+      sectionOf: (it) => it.missedConnection ? '${_journeyKind(it)}|missed' : _journeyKind(it),
+    );
     return [...groups.where((g) => !g.best.missedConnection), ...groups.where((g) => g.best.missedConnection)];
   }
 

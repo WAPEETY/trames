@@ -71,12 +71,19 @@ bool firstRideGone(Itinerary it, LiveRide? Function(Leg ride) liveOf) {
 ///
 /// With [earlier], a journey that works is still moved to an earlier bus
 /// among a ride's alternatives (its line or another one doing the same
-/// stretch) that the planner counts as left but, running late, can still be
-/// caught (a bus the planner can catch has its own journey): the rides after it are chosen again for the
+/// stretch) that can be caught: one running late, which the planner counts
+/// as left, or one the planner passes over because leaving later gets you
+/// there at the same time (it never returns that journey itself): the rides after it are chosen again for the
 /// earliest arrival. It is taken when you arrive sooner, or no later while
 /// leaving at most [WalkPolicy.earlierRideWait] before (that much more waiting on the
-/// way rather than at the start). Not for a journey whose rides the user
-/// picked.
+/// way rather than at the start), and never onto buses less sure than the
+/// ones it has ([sureness]: higher is surer, e.g. live over estimated over
+/// timetable). Not for a journey whose rides the user picked.
+///
+/// With [surest], a journey that works takes instead, ride by ride, the
+/// surest bus among the alternatives: the mix whose least sure ride is the
+/// surest, then with the surest rides overall, then arriving earliest.
+/// Walking is not tried. Unchanged when no ride has a surer alternative.
 ///
 /// Returns [it] itself when nothing moves and no ride is gone.
 Itinerary applyLiveTimes(
@@ -87,6 +94,8 @@ Itinerary applyLiveTimes(
   DateTime Function()? clock,
   int maxCombinations = 200,
   bool earlier = false,
+  bool surest = false,
+  int Function(Leg ride)? sureness,
 }) {
   final base = it.base ?? it;
   var moved = false;
@@ -108,7 +117,7 @@ Itinerary applyLiveTimes(
             ])
           : l,
   ];
-  if (!moved && !earlier && !it.transitLegs.any(gone)) return it;
+  if (!moved && !earlier && !surest && !it.transitLegs.any(gone)) return it;
   final liveBase = Itinerary(
       start: base.start, end: base.end, legs: legs, transfers: base.transfers, hiddenBecause: base.hiddenBecause);
 
@@ -155,8 +164,117 @@ Itinerary applyLiveTimes(
       ];
   bool ok() => tv.feasible && goneSlots().isEmpty;
   if (!moved && !it.transitLegs.any(gone) && !ok()) return it; // nothing live to re-plan around
+  /// How sure the rides in use are: the least sure one, then all together
+  /// (a walked ride is as sure as it gets).
+  const top = 1 << 20;
+  (int, int) score() {
+    var least = top, sum = 0;
+    for (var s = 0; s < tv.slotCount; s++) {
+      final ride = chosen(s);
+      final v = ride == null ? top : (sureness?.call(ride) ?? 0);
+      if (v < least) least = v;
+      sum += ride == null ? 0 : v;
+    }
+    return (least, sum);
+  }
+
+  bool surer((int, int) a, (int, int) b) => a.$1 > b.$1 || (a.$1 == b.$1 && a.$2 > b.$2);
+
+  /// Tries every mix of [options] (per slot, the variants to try) and
+  /// keeps the best working one by [better]; false when none works.
+  bool pick(List<List<int>> options, bool Function(Itinerary now, Itinerary? best) better) {
+    final start = tv.choices;
+    List<int>? best;
+    Itinerary? bestIt;
+    var tried = 0;
+    void go(int s, List<int> choice) {
+      if (tried >= maxCombinations) return;
+      if (s == tv.slotCount) {
+        tried++;
+        tv.restore(choice);
+        if (ok() && better(tv.current, bestIt)) {
+          best = List.of(choice);
+          bestIt = tv.current;
+        }
+        return;
+      }
+      for (final v in options[s]) {
+        go(s + 1, List.of(choice)..[s] = v);
+      }
+    }
+
+    go(0, start);
+    tv.restore(best ?? start);
+    return best != null;
+  }
+
+  // The journey works. Its surest buses, when asked for.
+  void takeSurest() {
+    final sure = sureness;
+    if (sure == null) return;
+    final options = [
+      for (var s = 0; s < tv.slotCount; s++)
+        [
+          tv.choiceOf(s),
+          if (chosen(s) case final ride? when !ride.onBoard)
+            for (var v = 0; v < rideCount(s); v++)
+              if (v != tv.choiceOf(s) && sure(tv.rideOf(s, v)) > sure(ride)) v,
+        ],
+    ];
+    if (options.every((o) => o.length == 1)) return;
+    (int, int)? bestScore;
+    pick(options, (now, best) {
+      final sc = score();
+      final wins = best == null ||
+          surer(sc, bestScore!) ||
+          (sc == bestScore && (now.end.isBefore(best.end) || (now.end == best.end && now.start.isAfter(best.start))));
+      if (wins) bestScore = sc;
+      return wins;
+    });
+  }
+
+  // An earlier bus at the first ride that has one; the rides after it take
+  // whichever variant arrives first. Never onto less sure buses.
+  void takeEarlier() {
+    final was = tv.current;
+    final wasScore = score();
+    for (var s = 0; s < tv.slotCount; s++) {
+      final ride = chosen(s);
+      if (ride == null || ride.onBoard) continue;
+      final sooner = [
+        for (var v = 0; v < rideCount(s); v++)
+          if (tv.rideOf(s, v).start.isBefore(ride.start)) v,
+      ];
+      if (sooner.isEmpty) continue;
+      final options = [
+        for (var k = 0; k < tv.slotCount; k++)
+          k < s
+              ? [tv.choiceOf(k)]
+              : k == s
+                  ? sooner
+                  : [for (var v = 0; v < tv.variantCount(k); v++) if (allowed(k, v)) v],
+      ];
+      (int, int)? bestScore;
+      final found = pick(options, (now, best) {
+        final sc = score();
+        if (surer(wasScore, sc)) return false;
+        final worth = now.end.isBefore(was.end) ||
+            (!now.end.isAfter(was.end) && was.start.difference(now.start) <= policy.earlierRideWait);
+        if (!worth) return false;
+        final wins = best == null ||
+            now.end.isBefore(best.end) ||
+            (now.end == best.end &&
+                (surer(sc, bestScore!) || (sc == bestScore && now.start.isBefore(best.start))));
+        if (wins) bestScore = sc;
+        return wins;
+      });
+      if (found) return;
+    }
+  }
+
   if (ok()) {
-    if (earlier) _takeEarlierRide(tv, ok, chosen, rideCount, allowed, maxCombinations, policy.earlierRideWait, (clock ?? DateTime.now)());
+    if (surest) takeSurest();
+    if (earlier) takeEarlier();
     return !moved && _sameChoices(tv.current, it) ? it : tv.current;
   }
 
@@ -215,59 +333,41 @@ bool _sameChoices(Itinerary a, Itinerary b) =>
     a.walkSlots.length == b.walkSlots.length &&
     a.walkSlots.containsAll(b.walkSlots);
 
-/// Moves the working journey of [tv] to an earlier bus, one the planner
-/// counts as left at [now], at the first ride that has one among its variants (see [applyLiveTimes]); the rides after it
-/// take whichever variant arrives first. Leaves [tv] as it was when nothing
-/// is worth it.
-void _takeEarlierRide(
-  TripVariants tv,
-  bool Function() ok,
-  Leg? Function(int slot) chosen,
-  int Function(int slot) rideCount,
-  bool Function(int slot, int variant) allowed,
-  int maxCombinations,
-  Duration wait,
-  DateTime now,
-) {
-  final start = tv.choices;
-  final was = tv.current;
-  for (var s = 0; s < tv.slotCount; s++) {
-    final ride = chosen(s);
-    if (ride == null || ride.onBoard) continue;
-    final sooner = [
-      for (var v = 0; v < rideCount(s); v++)
-        if (tv.rideOf(s, v).planned.isBefore(now) && tv.rideOf(s, v).start.isBefore(ride.start)) v,
-    ];
-    if (sooner.isEmpty) continue;
-    List<int>? best;
-    Itinerary? bestIt;
-    var tried = 0;
-    void search(int k, List<int> choice) {
-      if (tried >= maxCombinations) return;
-      if (k == tv.slotCount) {
-        tried++;
-        tv.restore(choice);
-        if (!ok()) return;
-        final now = tv.current;
-        final worth = now.end.isBefore(was.end) ||
-            (!now.end.isAfter(was.end) && was.start.difference(now.start) <= wait);
-        if (!worth) return;
-        final b = bestIt;
-        if (b == null || now.end.isBefore(b.end) || (now.end == b.end && now.start.isBefore(b.start))) {
-          best = List.of(choice);
-          bestIt = now;
-        }
-        return;
-      }
-      for (var v = 0; v < tv.variantCount(k); v++) {
-        if (allowed(k, v)) search(k + 1, List.of(choice)..[k] = v);
-      }
+/// The journeys to list for [planned] (the planner's) at their live times:
+///  * each on an earlier bus when that pays ([applyLiveTimes] `earlier`),
+///    unless another journey leaves no sooner and arrives before it: then
+///    leaving earlier is pointless and the planner's stands;
+///  * and each on its surest buses (`surest`), when those are other buses.
+/// Journeys whose first ride has gone are left out. The same journey may
+/// come out twice: grouping dedupes.
+List<Itinerary> liveJourneys(
+  List<Itinerary> planned,
+  LiveRide? Function(Leg ride) liveOf, {
+  WalkCache? walks,
+  WalkPolicy policy = kWalkPolicy,
+  DateTime Function()? clock,
+  int Function(Leg ride)? sureness,
+}) {
+  Itinerary at(Itinerary it, {bool earlier = false, bool surest = false}) => applyLiveTimes(it, liveOf,
+      walks: walks, policy: policy, clock: clock, earlier: earlier, surest: surest, sureness: sureness);
+  bool listed(Itinerary it) => !firstRideGone(it, liveOf);
+  final plain = [for (final it in planned) at(it)];
+  bool beaten(Itinerary it, int by) {
+    for (var i = 0; i < plain.length; i++) {
+      final x = plain[i];
+      if (i == by || x.missedConnection || !listed(x)) continue;
+      if (!x.start.isBefore(it.start) && x.end.isBefore(it.end)) return true;
     }
-
-    for (final v in sooner) {
-      search(s + 1, List.of(start)..[s] = v);
-    }
-    tv.restore(best ?? start);
-    if (best != null) return;
+    return false;
   }
+
+  final out = <Itinerary>[];
+  for (final (i, it) in planned.indexed) {
+    final sooner = at(it, earlier: true);
+    final first = _sameChoices(sooner, plain[i]) || beaten(sooner, i) ? plain[i] : sooner;
+    if (listed(first)) out.add(first);
+    final sure = at(it, surest: true);
+    if (!_sameChoices(sure, plain[i]) && listed(sure)) out.add(sure);
+  }
+  return out;
 }
