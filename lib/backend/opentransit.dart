@@ -70,6 +70,10 @@ class OpenTransitClient implements TripPlanner, PlaceSearch, StopBoards {
       realtime: j['realtime'] as bool? ?? false,
       delaySeconds: j['delaySeconds'] as int?,
       intermediateStops: (j['intermediateStops'] as List?)?.length ?? 0,
+      via: [
+        for (final p in (j['intermediateStops'] as List?) ?? const [])
+          if (p is Map<String, dynamic> && p['lat'] != null) TripStop(name: p['name'] as String? ?? '', position: _pos(p)),
+      ],
     );
   }
 

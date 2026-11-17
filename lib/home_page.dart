@@ -19,6 +19,7 @@ import 'backend/route_search.dart';
 import 'backend/trip_variants.dart';
 import 'area_buses.dart';
 import 'attribution.dart';
+import 'bus_clusters.dart';
 import 'bus_cone.dart';
 import 'favorites.dart';
 import 'l10n.dart';
@@ -179,11 +180,20 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       return;
     }
     final hint = state.runHints[id]?.stopId;
+    // A ride shown by its number ("REG 21087") is its line view's only one:
+    // its vehicle is the one on the map, and its name is no line to match.
+    final single = showsTripNumber(id);
     _lineTripTopics.sync({
       TramiteClient.tripTopic(id,
-          lineId: TramiteClient.lineId(prefix, state.name), stopId: tramite.covers(hint) ? hint : null): (data) {
+          lineId: single ? null : TramiteClient.lineId(prefix, state.name),
+          stopId: tramite.covers(hint) ? hint : null): (data) {
         if (!mounted || line != state || state.tripId != id) return;
-        setState(() => state.live = TramiteClient.parseTrip(data));
+        final live = TramiteClient.parseTrip(data);
+        setState(() => state.live = live);
+        if (single) {
+          state.buses = [if (live?.bus case final b?) (vehicle: b, color: null)];
+          _showLineBuses();
+        }
       },
     });
   }
@@ -242,7 +252,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // The line and a stop of the ride: to find the run when the planner's
       // trip id is from another timetable version.
       final topic = TramiteClient.tripTopic(trip,
-          lineId: line == null ? null : TramiteClient.lineId(prefix, line), stopId: tramite.covers(stop) ? stop : null);
+          lineId: line == null || showsTripNumber(trip) ? null : TramiteClient.lineId(prefix, line),
+          stopId: tramite.covers(stop) ? stop : null);
       wanted[topic] = (data) {
         if (!mounted) return;
         final t = TramiteClient.parseTrip(data);
@@ -912,6 +923,9 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _drawNearbyStops();
     _leaveBrowsing();
     if (tripId != null) _loadLineTrip(tripId);
+    // Rides told apart by number (trains): that one ride, not every vehicle
+    // of a "line" like REG (see kTripNumberFeeds).
+    if (showsTripNumber(tripId)) return;
 
     final prefix = lineId == null ? tramite.prefixOf(tripId) : null;
     final id = lineId ?? (prefix == null ? null : TramiteClient.lineId(prefix, name));
@@ -1001,6 +1015,25 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       tripId: v.backendTripId,
       hint: stop == null ? null : (stopId: stop, at: DateTime.now()),
     );
+  }
+
+  /// A tapped bubble of overlapping buses: zoom in on them until they
+  /// stand apart. Its buses are the ones drawn around the tap (the bubble
+  /// sits among them), within twice the cluster radius on screen.
+  Future<void> _zoomIntoCluster(LatLng at) async {
+    final m = map;
+    if (m == null) return;
+    final zoom = m.cameraPosition?.zoom ?? AreaBuses.minZoom;
+    final reach = 2 * kBusClusterRadiusPx * metersPerPixel(zoom, at.latitude);
+    final members = [
+      for (final b in areaBuses.tracker.buses.values)
+        if (distanceMeters(b.drawn, at) <= reach) b.drawn,
+    ];
+    if (members.isEmpty) return;
+    final size = MediaQuery.sizeOf(context);
+    final t = clusterZoomTarget(members, zoom: zoom, viewPx: (width: size.width, height: size.height / 2));
+    HapticFeedback.selectionClick();
+    await m.animateCamera(CameraUpdate.newLatLngZoom(t.center, t.zoom));
   }
 
   /// A map long press: on a bus, you're riding it ([_board]); elsewhere,
@@ -1183,11 +1216,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     final labelColor = _hex(Theme.of(context).colorScheme.onSurface);
     final haloColor = _hex(Theme.of(context).colorScheme.surface);
     await m.addGeoJsonSource('nearby', empty, promoteId: 'id');
-    for (final id in ['line', 'line-stops', 'approach', 'route', 'stops', 'endpoints', 'buses']) {
+    for (final id in ['line', 'line-stops', 'approach', 'route', 'via', 'stops', 'endpoints', 'buses']) {
       await m.addGeoJsonSource(id, empty);
     }
-    // Feature id = vehicle id: a tapped bus opens its trip.
-    await m.addGeoJsonSource('area-buses', empty, promoteId: 'id');
+    // Feature id = vehicle id: a tapped bus opens its trip. Buses that
+    // overlap merge into a bubble with their count (see kBusClusterRadiusPx).
+    await m.addSource(
+        'area-buses',
+        const GeojsonSourceProperties(
+            data: empty, promoteId: 'id', cluster: true, clusterRadius: kBusClusterRadiusPx));
     // Stop pins: tappable (filters departures to that stop); the selected one
     // is bigger.
     await m.addCircleLayer('nearby', 'nearby-circle',
@@ -1212,9 +1249,13 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           textOptional: true,
         ),
         minzoom: kStopNamesZoom);
-    m.onFeatureTapped.add((_, _, id, layerId, _) {
+    m.onFeatureTapped.add((_, latLng, id, layerId, _) {
       if (layerId == 'area-buses-circle' || layerId == 'area-buses-label') {
         _openBus(id);
+        return;
+      }
+      if (layerId == 'area-buses-cluster' || layerId == 'area-buses-count') {
+        _zoomIntoCluster(latLng);
         return;
       }
       if (layerId != 'nearby-circle' && layerId != 'nearby-label') return;
@@ -1258,6 +1299,27 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         ),
         minzoom: 15,
         enableInteraction: false);
+    // A route's rides: the stops they pass on the way (names when zoomed in),
+    // smaller than where you get on and off.
+    await m.addCircleLayer('via', 'via-circle',
+        const CircleLayerProperties(
+            circleRadius: 3.5, circleColor: '#FFFFFF', circleStrokeColor: ['get', 'color'], circleStrokeWidth: 2),
+        minzoom: 12,
+        enableInteraction: false);
+    await m.addSymbolLayer('via', 'via-label',
+        SymbolLayerProperties(
+          textField: ['get', 'name'],
+          textFont: ['Noto Sans Regular'],
+          textSize: 11,
+          textColor: labelColor,
+          textHaloColor: haloColor,
+          textHaloWidth: 1.5,
+          textAnchor: 'left',
+          textOffset: [0.8, 0],
+          textOptional: true,
+        ),
+        minzoom: 15,
+        enableInteraction: false);
     await m.addCircleLayer('stops', 'stops-circle',
         const CircleLayerProperties(
             circleRadius: 6, circleColor: '#FFFFFF', circleStrokeColor: ['get', 'color'], circleStrokeWidth: 3),
@@ -1279,7 +1341,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             iconAllowOverlap: true,
             iconIgnorePlacement: true,
           ),
-          filter: ['has', 'heading'],
+          filter: [
+            'all',
+            ['has', 'heading'],
+            ['!', ['has', 'point_count']],
+          ],
           minzoom: source == 'area-buses' ? AreaBuses.minZoom : null,
           enableInteraction: false);
     }
@@ -1287,6 +1353,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     await m.addCircleLayer('area-buses', 'area-buses-circle',
         const CircleLayerProperties(
             circleRadius: 11, circleColor: ['get', 'color'], circleStrokeColor: '#FFFFFF', circleStrokeWidth: 2),
+        filter: ['!', ['has', 'point_count']],
         minzoom: AreaBuses.minZoom);
     await m.addSymbolLayer('area-buses', 'area-buses-label',
         const SymbolLayerProperties(
@@ -1297,6 +1364,39 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
           textAllowOverlap: true,
           textIgnorePlacement: true,
         ),
+        filter: ['!', ['has', 'point_count']],
+        minzoom: AreaBuses.minZoom);
+    // Overlapping buses: one bubble with how many. Drawn unlike any bus (a
+    // light disc with a primary ring, over one or two more peeking out
+    // behind it, a stack) so it reads as a group.
+    for (final (id, shift, atLeast) in [('area-buses-stack2', 6.0, 3), ('area-buses-stack1', 3.0, 2)]) {
+      await m.addCircleLayer('area-buses', id,
+          CircleLayerProperties(
+            circleRadius: 14,
+            circleColor: haloColor,
+            circleStrokeColor: primary,
+            circleStrokeWidth: 2,
+            circleTranslate: [shift, -shift],
+          ),
+          filter: ['>=', ['get', 'point_count'], atLeast],
+          minzoom: AreaBuses.minZoom,
+          enableInteraction: false);
+    }
+    await m.addCircleLayer('area-buses', 'area-buses-cluster',
+        CircleLayerProperties(
+            circleRadius: 14, circleColor: haloColor, circleStrokeColor: primary, circleStrokeWidth: 3),
+        filter: ['has', 'point_count'],
+        minzoom: AreaBuses.minZoom);
+    await m.addSymbolLayer('area-buses', 'area-buses-count',
+        SymbolLayerProperties(
+          textField: ['get', 'point_count_abbreviated'],
+          textFont: ['Noto Sans Bold'],
+          textSize: 13,
+          textColor: primary,
+          textAllowOverlap: true,
+          textIgnorePlacement: true,
+        ),
+        filter: ['has', 'point_count'],
         minzoom: AreaBuses.minZoom);
     await m.addCircleLayer('buses', 'buses-circle',
         const CircleLayerProperties(
@@ -1382,11 +1482,21 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     return left.length < 2 ? [bus.position, l.to] : left;
   }
 
+  /// The stops a ride still passes: on the bus you're on, those it hasn't
+  /// gone by yet.
+  List<TripStop> _viaStops(Leg l) {
+    final bus = l.onBoard ? _legTrips[l.tripId]?.bus : null;
+    if (bus == null) return l.via;
+    final path = tripPaths[l.tripId] ?? l.points;
+    return [for (final s in l.via) if (approachPath(path, bus.position, s.position).isNotEmpty) s];
+  }
+
   Future<void> _drawSelected({bool fit = true}) async {
     if (!styleReady) return;
     final it = selected;
     if (it == null) {
       await map!.setGeoJsonSource('route', _collection([]));
+      await map!.setGeoJsonSource('via', _collection([]));
       await map!.setGeoJsonSource('stops', _collection([]));
       return;
     }
@@ -1402,6 +1512,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               },
               'properties': {'walk': !l.transit, 'color': _colorHexFor(it, l)},
             },
+        ]));
+    await map!.setGeoJsonSource(
+        'via',
+        _collection([
+          for (final l in it.transitLegs)
+            for (final st in _viaStops(l)) _point(st.position, {'color': _colorHexFor(it, l), 'name': titleCase(st.name)}),
         ]));
     await map!.setGeoJsonSource(
         'stops',
@@ -2015,6 +2131,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
         onSwitchDirection: _otherDirection() == null ? null : () => _loadLineTrip(_otherDirection()!),
         onStopTap: (stop) => map?.animateCamera(CameraUpdate.newLatLngZoom(stop.position, 16.5)),
         bus: tracker.buses[MotisClient.rawTripId(l.tripId)]?.vehicle,
+        others: [for (final b in tracker.buses.values) b.vehicle],
       );
     }
     if (selected != null) return _tripSlivers(selected!);

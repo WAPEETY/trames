@@ -35,6 +35,12 @@ void main() {
     expect(busPlaceOnTrip(stops, bus(const LatLng(41.9015, 12.5), stopId: 's_a', seq: 4)), (index: 3, atStop: false));
   });
 
+  test("another trip's bus: placed by its stop only", () {
+    expect(busPlaceOnTrip(stops, bus(const LatLng(41.9015, 12.5), seq: 3), bySequence: false), isNull);
+    expect(busPlaceOnTrip(stops, bus(const LatLng(41.90101, 12.5), stopId: 's_b', seq: 9), bySequence: false),
+        (index: 1, atStop: true));
+  });
+
   test('sequence alone, and unknown', () {
     expect(busPlaceOnTrip(stops, bus(const LatLng(41.9015, 12.5), seq: 3)), (index: 2, atStop: false));
     expect(busPlaceOnTrip(stops, bus(const LatLng(41.9015, 12.5), stopId: 'elsewhere')), isNull);

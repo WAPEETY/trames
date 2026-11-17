@@ -232,6 +232,7 @@ class Leg {
     this.delaySeconds,
     this.arrivalDelaySeconds,
     this.intermediateStops = 0,
+    this.via = const [],
     this.alternatives = const [],
     this.origin,
     this.fromStopId,
@@ -268,6 +269,10 @@ class Leg {
   /// Arrival delay at the alighting stop.
   final int? arrivalDelaySeconds;
   final int intermediateStops;
+
+  /// The stops the ride passes between [from] and [to] (when the planner
+  /// says), shown along its line on the map.
+  final List<TripStop> via;
   final List<LegAlternative> alternatives;
 
   /// Where the ride's trip starts (its terminus), when the planner says.
@@ -335,6 +340,7 @@ class Leg {
       delaySeconds: delaySeconds,
       arrivalDelaySeconds: arrivalDelaySeconds,
       intermediateStops: intermediateStops,
+      via: via,
       alternatives: alternatives ?? this.alternatives,
       origin: origin,
       fromStopId: fromStopId,

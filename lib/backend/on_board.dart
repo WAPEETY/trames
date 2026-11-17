@@ -205,6 +205,7 @@ class OnBoardTrip {
       realtime: stop.live,
       arrivalDelaySeconds: stop.delaySeconds,
       intermediateStops: k,
+      via: remaining.sublist(0, k),
       // Live data for this ride is followed at the next stop.
       fromStopId: remaining.first.stopId,
       toStopId: stop.stopId,

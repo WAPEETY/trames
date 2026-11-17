@@ -12,6 +12,7 @@ export 'cities.dart';
 export 'models.dart';
 export 'on_board.dart';
 export 'tramite.dart';
+export 'trip_numbers.dart';
 
 /// The app talks to transit data only through these four capabilities.
 /// Each can come from a different source; [TransitBackend] bundles one of each.
@@ -162,9 +163,12 @@ double distanceMeters(LatLng a, LatLng b) {
 ///
 /// The feed doesn't tell "at" from "heading to", so within [atStopMeters] of
 /// the stop counts as at it. Before its first stop a bus is shown at it.
-({int index, bool atStop})? busPlaceOnTrip(List<TripStop> stops, Vehicle bus, {double atStopMeters = 40}) {
+/// Without [bySequence] (a bus of another trip, whose sequence numbers are
+/// its own trip's), only its stop places it.
+({int index, bool atStop})? busPlaceOnTrip(List<TripStop> stops, Vehicle bus,
+    {double atStopMeters = 40, bool bySequence = true}) {
   int? index;
-  final seqIndex = bus.stopSequence == null ? null : bus.stopSequence! - 1;
+  final seqIndex = bus.stopSequence == null || !bySequence ? null : bus.stopSequence! - 1;
   if (bus.stopId case final id?) {
     // A stop can be on a trip twice (loop lines): the one nearest the
     // sequence number, else the first.

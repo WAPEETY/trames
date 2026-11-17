@@ -277,7 +277,7 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
           ? [_pos(from), _pos(to)]
           : decodePolyline(geom['points'] as String, precision: geom['precision'] as int? ?? 6),
       distanceMeters: (j['distance'] as num?)?.toDouble() ?? (geom?['length'] as num?)?.toDouble() ?? 0,
-      routeShortName: j['routeShortName'] as String? ?? j['displayName'] as String?,
+      routeShortName: _line(j),
       headsign: j['headsign'] as String?,
       tripId: rawTripId(j['tripId'] as String?),
       backendTripId: j['tripId'] as String?,
@@ -285,6 +285,10 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
       delaySeconds: transit && scheduled != null ? start.difference(scheduled).inSeconds : null,
       arrivalDelaySeconds: transit && scheduledEnd != null ? end.difference(scheduledEnd).inSeconds : null,
       intermediateStops: (j['intermediateStops'] as List?)?.length ?? 0,
+      via: [
+        for (final p in ((j['intermediateStops'] as List?) ?? const []).cast<Map<String, dynamic>>())
+          TripStop(name: p['name'] as String? ?? '', position: _pos(p), stopId: p['stopId'] as String?),
+      ],
       origin: transit ? _origin(j['tripFrom']) : null,
       fromStopId: transit ? from['stopId'] as String? : null,
       toStopId: transit ? to['stopId'] as String? : null,
@@ -339,6 +343,13 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
   Future<TripInfo> _fetchTrip(String id) async =>
       _parseTrip(await _get('/api/v6/trip', {'tripId': id}) as Map<String, dynamic>);
 
+  /// What passengers call a ride (a leg or stop time): its line, with its
+  /// trip number where the operator shows it ("REG 21087", see rideLabel).
+  static String? _line(Map<String, dynamic> j) {
+    final line = j['routeShortName'] as String? ?? j['displayName'] as String?;
+    return line == null ? null : rideLabel(line, j['tripShortName'] as String?, j['tripId'] as String?);
+  }
+
   /// A time is live unless MOTIS says it's the timetable's.
   static bool _liveReason(Object? reason) => reason is String && reason != 'NO_RT_DATA' && reason != 'SCHEDULED';
 
@@ -354,7 +365,7 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
           live: _liveReason(p['departureTimestampReason'] ?? p['arrivalTimestampReason']),
         );
     return TripInfo(
-      line: ride['routeShortName'] as String? ?? ride['displayName'] as String? ?? '',
+      line: _line(ride) ?? '',
       mode: ride['mode'] as String? ?? 'BUS',
       headsign: ride['headsign'] as String? ?? '',
       directionId: int.tryParse('${ride['directionId']}'),
@@ -386,7 +397,7 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
     }) as Map<String, dynamic>;
     for (final s in (d['stopTimes'] as List).cast<Map<String, dynamic>>()) {
       final id = s['tripId'] as String?;
-      final name = s['routeShortName'] as String? ?? s['displayName'] as String?;
+      final name = _line(s);
       if (id != null && id.startsWith(run) && (line == null || name?.toLowerCase() == line.toLowerCase())) return id;
     }
     return null;
@@ -535,7 +546,7 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
       final time = _time(dep);
       final sched = place['scheduledDeparture'] == null ? null : _time(place['scheduledDeparture']);
       items.add((
-        line: s['routeShortName'] as String? ?? s['displayName'] as String? ?? '?',
+        line: _line(s) ?? '?',
         mode: s['mode'] as String? ?? 'BUS',
         headsign: s['headsign'] as String? ?? '',
         departure: Departure(

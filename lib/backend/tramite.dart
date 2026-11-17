@@ -141,6 +141,13 @@ class TramiteClient {
 
   static DateTime _time(String s) => DateTime.parse(s).toLocal();
 
+  /// What passengers call a ride (a stop time, trip or vehicle): its line,
+  /// with its trip number where the operator shows it (see rideLabel).
+  static String? _line(Map<String, dynamic> j) {
+    final line = j['routeShortName'] as String?;
+    return line == null ? null : rideLabel(line, j['tripShortName'] as String?, j['tripId'] as String?);
+  }
+
   /// A Tramite vehicle as the app's [Vehicle], with its line colour.
   static ({Vehicle vehicle, String? color}) parseVehicle(Map<String, dynamic> j) {
     final color = j['routeColor'] as String?;
@@ -150,7 +157,7 @@ class TramiteClient {
         label: j['id'] as String,
         tripId: j['gtfsTripId'] as String?,
         backendTripId: j['tripId'] as String?,
-        routeShortName: j['routeShortName'] as String?,
+        routeShortName: _line(j),
         position: LatLng((j['lat'] as num).toDouble(), (j['lon'] as num).toDouble()),
         timestamp: _time(j['timestamp'] as String),
         bearing: (j['bearing'] as num?)?.toDouble(),
@@ -179,7 +186,7 @@ class TramiteClient {
   static TramiteRow _row(Map<String, dynamic> s) {
     final time = _time(s['departure'] as String);
     final sched = _time(s['scheduledDeparture'] as String);
-    final line = s['routeShortName'] as String? ?? '?';
+    final line = _line(s) ?? '?';
     final from = s['tripFrom'] as Map<String, dynamic>?;
     final v = s['vehicle'] as Map<String, dynamic>?;
     final departure = Departure(
@@ -248,7 +255,7 @@ class TramiteClient {
         label: v['id'] as String,
         tripId: data['gtfsTripId'] as String?,
         backendTripId: data['tripId'] as String?,
-        routeShortName: data['routeShortName'] as String?,
+        routeShortName: _line(data),
         position: LatLng((v['lat'] as num).toDouble(), (v['lon'] as num).toDouble()),
         timestamp: _time(v['timestamp'] as String),
         bearing: (v['bearing'] as num?)?.toDouble(),
@@ -260,7 +267,7 @@ class TramiteClient {
     return TramiteTrip(
       tripId: data['gtfsTripId'] as String?,
       backendTripId: data['tripId'] as String?,
-      line: data['routeShortName'] as String? ?? '?',
+      line: _line(data) ?? '?',
       cancelled: data['cancelled'] == true,
       stops: stops,
       bus: bus,
