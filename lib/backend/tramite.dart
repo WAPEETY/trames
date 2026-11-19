@@ -49,6 +49,57 @@ class TramiteClient {
     return jsonDecode(utf8.decode(res.bodyBytes));
   }
 
+  // ---- place search ----
+
+  /// Suggestions for [query] from Tramite's place search, made around
+  /// [near]; [session] groups one search's requests up to the place picked
+  /// ([placeLocation]). Throws [TramiteException]: 501 when this server has
+  /// no place search, 429/503 with [TramiteException.retryAfter].
+  Future<({List<Place> places, String? attribution})> placeSuggestions(String query,
+      {required LatLng near, String? lang, String? session}) async {
+    final d = await _placesGet('/v1/places/autocomplete', {
+      'q': query,
+      'near': '${near.latitude},${near.longitude}',
+      'lang': ?lang,
+      'session': ?session,
+    }) as Map<String, dynamic>;
+    final attribution = d['attribution'] as String?;
+    return (
+      attribution: attribution,
+      places: [
+        for (final r in (d['results'] as List).cast<Map<String, dynamic>>())
+          Place.unlocated(
+            placeId: r['id'] as String,
+            name: r['name'] as String,
+            subtitle: switch (r['subtitle']) { final String s when s.isNotEmpty => s, _ => null },
+            position: near,
+            kind: r['kind'] == 'address' ? PlaceKind.address : PlaceKind.place,
+            distanceHint: (r['distanceMeters'] as num?)?.toDouble(),
+            credit: attribution,
+          ),
+      ],
+    );
+  }
+
+  /// Where the suggestion [id] is; with its search's [session] (ends it).
+  Future<LatLng> placeLocation(String id, {String? lang, String? session}) async {
+    final d = await _placesGet('/v1/places/${Uri.encodeComponent(id).replaceAll('%3A', ':')}', {'lang': ?lang, 'session': ?session})
+        as Map<String, dynamic>;
+    return LatLng((d['lat'] as num).toDouble(), (d['lon'] as num).toDouble());
+  }
+
+  /// Like [_get], quicker to give up (search falls back on another source),
+  /// and with the server's Retry-After.
+  Future<dynamic> _placesGet(String path, Map<String, String> query) async {
+    final res = await _client.get(uri(path, query), headers: kHeaders).timeout(const Duration(seconds: 6));
+    if (res.statusCode != 200) {
+      final secs = int.tryParse(res.headers['retry-after'] ?? '');
+      throw TramiteException(res.statusCode, utf8.decode(res.bodyBytes),
+          retryAfter: secs == null ? null : Duration(seconds: secs));
+    }
+    return jsonDecode(utf8.decode(res.bodyBytes));
+  }
+
   /// Adds and removes topics of the open stream [streamId].
   Future<void> updateTopics(String streamId, {Iterable<String> add = const [], Iterable<String> remove = const []}) async {
     final res = await _client
@@ -314,9 +365,12 @@ class TramiteRow {
 }
 
 class TramiteException implements Exception {
-  TramiteException(this.status, this.body);
+  TramiteException(this.status, this.body, {this.retryAfter});
   final int status;
   final String body;
+
+  /// When to ask again (Retry-After), on 429 and 503.
+  final Duration? retryAfter;
   @override
   String toString() => 'Tramite $status: $body';
 }

@@ -1757,19 +1757,39 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
               icon: Icon(fav ? Icons.star_rounded : Icons.star_outline_rounded, color: fav ? cs.primary : null),
               tooltip: fav ? context.l10n.removeFavourite : context.l10n.addFavourite,
               variant: M3EIconButtonVariant.standard,
-              onPressed: () {
+              onPressed: () async {
                 HapticFeedback.selectionClick();
-                favorites.toggle(p);
+                final place = await _located(p);
+                if (place != null) favorites.toggle(place);
               },
             );
           },
         ),
       ]),
-      onTap: () {
+      onTap: () async {
         c.closeView(p.name);
-        isFrom ? _setOrigin(p) : _setDestination(p);
+        final place = await _located(p);
+        if (place == null || !mounted) return;
+        isFrom ? _setOrigin(place) : _setDestination(place);
       },
     );
+  }
+
+  /// [p] with its position: a search suggestion is located first. Null
+  /// (and a message) when that fails.
+  Future<Place?> _located(Place p) async {
+    if (!p.needsLocating) return p;
+    if (backend.places case final PlaceLocator locator) {
+      final l = context.l10n;
+      final messenger = ScaffoldMessenger.of(context);
+      try {
+        return await locator.locate(p);
+      } catch (e) {
+        messenger.showSnackBar(SnackBar(content: Text(l.searchFailed('$e'))));
+        return null;
+      }
+    }
+    return p;
   }
 
   /// The geocoder returns one result per stop *name*; the pole across the
@@ -1870,18 +1890,25 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // results drop exact duplicates (same name and label).
       final seen = <String>{};
       final unique = results.where((p) => seen.add(p.stopId ?? '${p.name}|${p.subtitle}'));
+      // Stop names come in capitals; addresses and places as written.
       items.addAll(unique.map((p) => _placeTile(
             c,
-            Place(
-              name: titleCase(p.name),
-              subtitle: p.subtitle,
-              position: p.position,
-              kind: p.kind,
-              stopId: p.stopId,
-              station: p.station,
-            ),
+            p.kind != PlaceKind.stop
+                ? p
+                : Place(
+                    name: titleCase(p.name),
+                    subtitle: p.subtitle,
+                    position: p.position,
+                    kind: p.kind,
+                    stopId: p.stopId,
+                    station: p.station,
+                  ),
             isFrom: isFrom,
           )));
+      // Credit the place search where its data is shown, as it requires.
+      for (final credit in {for (final p in unique) ?p.credit}) {
+        items.add(_SearchCredit(credit));
+      }
     } catch (e) {
       items.add(ListTile(title: Text(l.searchFailed('$e'))));
     }
@@ -2482,6 +2509,25 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
 }
 
 /// Section title in the search view ("Stops", "Destinations").
+/// The place search's credit under its results ("Google Maps"), as it
+/// asks: not translated, not wrapped.
+class _SearchCredit extends StatelessWidget {
+  const _SearchCredit(this.credit);
+  final String credit;
+
+  @override
+  Widget build(BuildContext context) {
+    final t = Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.onSurfaceVariant);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+      child: Align(
+        alignment: Alignment.centerRight,
+        child: Text(credit, style: t, maxLines: 1, softWrap: false),
+      ),
+    );
+  }
+}
+
 class _SuggestionHeader extends StatelessWidget {
   const _SuggestionHeader(this.title);
   final String title;

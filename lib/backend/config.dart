@@ -2,6 +2,7 @@ import 'backend.dart';
 import 'live_connection.dart';
 import 'motis.dart';
 import 'opentransit.dart';
+import 'place_finder.dart';
 import 'walk_rules.dart';
 
 /// Transitous (public MOTIS): routing, search, departures, trips, walking.
@@ -12,6 +13,11 @@ import 'walk_rules.dart';
 ///  * own OTP server    -> write `OtpClient implements TripPlanner, StopBoards`
 ///  * own geocoder      -> any `PlaceSearch` (e.g. a Photon/Pelias client)
 final MotisClient _motis = MotisClient(baseUrl: kMotisUrl, walkingSpeedKmh: walkingSpeedKmh);
+
+/// Search: stops from MOTIS, places from Tramite (else Photon). One for
+/// the app, so what it learnt (Tramite has no place search, or asked to
+/// wait) survives city switches.
+final PlaceFinder _finder = PlaceFinder(motis: _motis, tramite: tramite);
 
 /// Transitous, the public MOTIS server the app uses unless set otherwise.
 const kMotisUrl = 'https://api.transitous.org';
@@ -54,7 +60,7 @@ TransitBackend createBackend({CityConfig? city}) {
     name: city == null ? 'Transitous' : 'Transitous ${city.name}',
     city: city,
     planner: _motis,
-    places: _motis,
+    places: _finder,
     stops: _motis,
     paths: _motis,
     trips: _motis,

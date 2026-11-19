@@ -415,6 +415,15 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
     return [?stop, ...await names];
   }
 
+  /// Only stops and stations: by stop number, else by name. For searches
+  /// that take addresses and places from another source.
+  Future<List<Place>> searchStops(String query, {LatLng? near}) async {
+    final byCode = RegExp(r'^\d{3,7}$').hasMatch(query.trim()) ? _stopByCode(query.trim(), near) : null;
+    final names = _geocode(query, near: near, type: 'STOP');
+    final stop = await byCode;
+    return [?stop, ...(await names).where((p) => p.kind == PlaceKind.stop)];
+  }
+
   Future<Place?> _stopByCode(String code, LatLng? near) async {
     try {
       // The active city's feed, else whichever feed the stops around [near]
@@ -453,9 +462,10 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
     return _feeds[cell] = feed;
   }
 
-  Future<List<Place>> _geocode(String query, {LatLng? near}) async {
+  Future<List<Place>> _geocode(String query, {LatLng? near, String? type}) async {
     final d = await _get('/api/v1/geocode', {
       'text': query,
+      'type': ?type,
       'language': language,
       // More than the default 10: results are re-ranked by distance in the
       // app, and local matches shouldn't be cut before that.

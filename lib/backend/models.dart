@@ -18,7 +18,28 @@ class Place {
     this.stopId,
     this.station = false,
     this.onBoard,
-  });
+    this.placeId,
+    this.distanceHint,
+    this.credit,
+  }) : located = true;
+
+  /// A search suggestion whose position is not known yet: [placeId] is
+  /// what [PlaceLocator.locate] asks for, and [position] only a stand-in
+  /// (where the search was made) until then.
+  const Place.unlocated({
+    required String this.placeId,
+    required this.name,
+    required this.position,
+    this.subtitle,
+    this.kind = PlaceKind.place,
+    this.distanceHint,
+    this.credit,
+  })  : located = false,
+        isMyLocation = false,
+        stopId = null,
+        station = false,
+        onBoard = null;
+
   final String name;
   final String? subtitle;
   final LatLng position;
@@ -35,6 +56,25 @@ class Place {
   /// Set when this origin is a vehicle you are riding, not a place: trips
   /// start on board and say where to get off.
   final OnBoardRide? onBoard;
+
+  /// The place search's id for it (kept once located: favourites match by it).
+  final String? placeId;
+
+  /// False for a search suggestion still to be located ([Place.unlocated]).
+  final bool located;
+
+  /// How far it is from where the search was made, when the search said
+  /// (for ordering suggestions that have no position yet).
+  final double? distanceHint;
+
+  /// The data's source to credit next to it ("Google Maps"), when it must be.
+  final String? credit;
+
+  bool get needsLocating => !located;
+
+  /// This place at [at], located.
+  Place locatedAt(LatLng at) =>
+      Place(name: name, subtitle: subtitle, position: at, kind: kind, placeId: placeId, credit: credit);
 }
 
 /// The vehicle run you are riding (see [Place.onBoard]).

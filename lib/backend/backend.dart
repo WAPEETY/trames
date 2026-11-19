@@ -11,6 +11,7 @@ import 'on_board.dart';
 export 'cities.dart';
 export 'models.dart';
 export 'on_board.dart';
+export 'place_finder.dart' show PlaceLocator;
 export 'tramite.dart';
 export 'trip_numbers.dart';
 
@@ -216,7 +217,10 @@ List<Place> rankByProximity(List<Place> places, LatLng reference, {double localK
   final local = <Place>[];
   final far = <(double, int, Place)>[];
   for (var i = 0; i < places.length; i++) {
-    final d = distanceMeters(reference, places[i].position) / 1000;
+    final p = places[i];
+    // A suggestion not located yet: the distance its search gave, else
+    // taken as local (the search was made around [reference]).
+    final d = (p.needsLocating ? p.distanceHint ?? 0 : distanceMeters(reference, p.position)) / 1000;
     if (d <= localKm) {
       local.add(places[i]);
     } else {

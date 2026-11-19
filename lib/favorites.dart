@@ -48,9 +48,9 @@ class FavoritesStore extends ChangeNotifier {
     await _prefs.setString(_key, jsonEncode([for (final f in _items) _toJson(f)]));
   }
 
-  /// Same stop id, or same name at (about) the same spot.
+  /// Same stop id, same place search id, or same name at (about) the same spot.
   static String keyOf(Place p) =>
-      p.stopId ?? '${p.name.toLowerCase()}@${p.position.latitude.toStringAsFixed(4)},${p.position.longitude.toStringAsFixed(4)}';
+      p.stopId ?? p.placeId ?? '${p.name.toLowerCase()}@${p.position.latitude.toStringAsFixed(4)},${p.position.longitude.toStringAsFixed(4)}';
 
   static Map<String, dynamic> _toJson(Place p) => {
         'name': p.name,
@@ -60,6 +60,8 @@ class FavoritesStore extends ChangeNotifier {
         'kind': p.kind.name,
         'stopId': p.stopId,
         'station': p.station,
+        'placeId': ?p.placeId,
+        'credit': ?p.credit,
       };
 
   static Place _fromJson(Map<String, dynamic> j) => Place(
@@ -69,6 +71,8 @@ class FavoritesStore extends ChangeNotifier {
         kind: PlaceKind.values.firstWhere((k) => k.name == j['kind'], orElse: () => PlaceKind.place),
         stopId: j['stopId'] as String?,
         station: j['station'] as bool? ?? false,
+        placeId: j['placeId'] as String?,
+        credit: j['credit'] as String?,
       );
 
   /// Older saves kept the (English) kind in the subtitle ("Place · Roma");
