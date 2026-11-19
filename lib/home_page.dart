@@ -1889,7 +1889,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // Stops are distinct by stop id (each pole is one direction); other
       // results drop exact duplicates (same name and label).
       final seen = <String>{};
-      final unique = results.where((p) => seen.add(p.stopId ?? '${p.name}|${p.subtitle}'));
+      // A list: walked twice (tiles, credits), and the filter adds to [seen].
+      final unique = results.where((p) => seen.add(p.stopId ?? '${p.name}|${p.subtitle}')).toList();
       // Stop names come in capitals; addresses and places as written.
       items.addAll(unique.map((p) => _placeTile(
             c,
