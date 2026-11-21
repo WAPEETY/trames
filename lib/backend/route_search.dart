@@ -143,11 +143,11 @@ class RouteSearch {
   }
 
   /// Journeys from [from] to [to] ([toName] names the last walk).
-  Future<List<RouteGroup>> search(LatLng from, LatLng to, {String toName = ''}) async {
+  Future<List<RouteGroup>> search(LatLng from, LatLng to, {String toName = '', DateTime? time, bool arriveBy = false}) async {
     Object? firstError;
     final batches = await Future.wait(profiles.map((p) async {
       try {
-        return await planner.plan(from, to, options: p.options);
+        return await planner.plan(from, to, options: p.options.copyWith(time: time, arriveBy: arriveBy));
       } catch (e) {
         firstError ??= e;
         return <Itinerary>[];

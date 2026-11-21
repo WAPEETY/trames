@@ -7,6 +7,7 @@
   "refresh": "Refresh",
   "orWord": "or",
   "now": "now",
+  "arriveBy": "Arrive by",
   "min": "min",
   "waitIn": "in",
   "@waitIn": {"description": "Above the minutes until the bus reaches the stop, in the journey view (in / 10 / min)."},

@@ -116,6 +116,8 @@ class MotisClient implements TripPlanner, OnBoardPlanner, PlaceSearch, StopBoard
       'numItineraries': '8',
       'detailedLegs': 'true',
       'searchWindow': '${o.searchWindowMinutes * 60}',
+      if (o.time != null) 'time': motisTime(o.time!),
+      'arriveBy': '${o.arriveBy}',
       ..._pace,
       // MOTIS keeps only options better on departure, arrival or changes,
       // so a direct bus that ties a walk-heavy metro option is dropped

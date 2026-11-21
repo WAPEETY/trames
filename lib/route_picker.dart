@@ -24,6 +24,9 @@ class RoutePicker extends StatefulWidget {
     required this.fromIsMyLocation,
     required this.fromSuggestions,
     required this.toSuggestions,
+    this.planningTime,
+    this.arriveBy = false,
+    this.onPlanningTimeChanged,
     this.onSwap,
     this.onClear,
   });
@@ -36,6 +39,9 @@ class RoutePicker extends StatefulWidget {
   final bool fromIsMyLocation;
   final M3ESearchSuggestionsBuilder fromSuggestions;
   final M3ESearchSuggestionsBuilder toSuggestions;
+  final DateTime? planningTime;
+  final bool arriveBy;
+  final void Function(DateTime? time, bool arriveBy)? onPlanningTimeChanged;
   final VoidCallback? onSwap;
   final VoidCallback? onClear;
 
@@ -79,7 +85,8 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
             color: cs.surfaceContainerHigh,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(radius)),
             clipBehavior: Clip.antiAlias,
-            child: Row(children: [
+            child: Column(mainAxisSize: MainAxisSize.min, children: [
+              Row(children: [
               Expanded(
                 child: Column(mainAxisSize: MainAxisSize.min, children: [
                   // "From" row grows in from zero height; slight overshoot allowed.
@@ -142,9 +149,75 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                       ),
               ),
             ]),
+              Divider(height: 1, indent: 16, endIndent: 16, color: cs.outlineVariant),
+              _timeRow(),
+            ]),
           ),
         );
       },
+    );
+  }
+
+  Widget _timeRow() {
+    final cs = Theme.of(context).colorScheme;
+    final l = context.l10n;
+    final localizations = MaterialLocalizations.of(context);
+    final time = widget.planningTime;
+    final label = time == null
+        ? l.now
+        : '${localizations.formatMediumDate(time)} · ${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(time))}';
+
+    return SizedBox(
+      height: 48,
+      child: Row(children: [
+        Expanded(
+          child: InkWell(
+            onTap: () async {
+              final now = DateTime.now();
+              final initial = widget.planningTime ?? now;
+              final date = await showDatePicker(
+                context: context,
+                initialDate: initial,
+                firstDate: now.subtract(const Duration(days: 365)),
+                lastDate: now.add(const Duration(days: 365)),
+              );
+              if (date == null || !mounted) return;
+
+              final timeOfDay = await showTimePicker(
+                context: context,
+                initialTime: TimeOfDay.fromDateTime(initial),
+              );
+              if (timeOfDay == null || !mounted) return;
+
+              widget.onPlanningTimeChanged?.call(
+                DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute),
+                widget.arriveBy,
+              );
+            },
+            child: Row(children: [
+              const SizedBox(width: 16),
+              Icon(Icons.schedule_rounded, size: 20, color: cs.onSurfaceVariant),
+              const SizedBox(width: 16),
+              Expanded(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis)),
+            ]),
+          ),
+        ),
+        if (time != null)
+          IconButton(
+            tooltip: l.now,
+            icon: const Icon(Icons.close_rounded, size: 18),
+            onPressed: () => widget.onPlanningTimeChanged?.call(null, widget.arriveBy),
+          ),
+        Checkbox(
+          value: widget.arriveBy,
+          onChanged: (value) => widget.onPlanningTimeChanged?.call(widget.planningTime, value ?? false),
+        ),
+        TextButton(
+          onPressed: () => widget.onPlanningTimeChanged?.call(widget.planningTime, !widget.arriveBy),
+          child: Text(l.arriveBy),
+        ),
+        const SizedBox(width: 8),
+      ]),
     );
   }
 

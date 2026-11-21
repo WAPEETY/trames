@@ -111,7 +111,25 @@ class PlanOptions {
     this.maxTransfers,
     this.maxWalkMinutes,
     this.extraTransferMinutes,
+    this.time,
+    this.arriveBy = false,
   });
+
+  PlanOptions copyWith({DateTime? time, bool? arriveBy}) => PlanOptions(
+        searchWindowMinutes: searchWindowMinutes,
+        legAlternatives: legAlternatives,
+        maxTransfers: maxTransfers,
+        maxWalkMinutes: maxWalkMinutes,
+        extraTransferMinutes: extraTransferMinutes,
+        time: time,
+        arriveBy: arriveBy ?? this.arriveBy,
+      );
+
+  /// Time around which the route is planned. Null means now.
+  final DateTime? time;
+
+  /// Whether [time] is an arrival deadline instead of a departure time.
+  final bool arriveBy;
 
   /// How far after "now" departures are searched.
   final int searchWindowMinutes;

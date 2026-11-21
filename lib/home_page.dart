@@ -39,8 +39,8 @@ const kMapStyleDark = 'https://tiles.openfreemap.org/styles/fiord';
 const kLegPalette = ['#D81B60', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00897B'];
 const kWalkColor = '#9E9E9E';
 
-/// Sheet peek: drag handle + destination search bar.
-const kSheetPeek = 128.0;
+/// Sheet peek: drag handle + destination search bar and time controls.
+const kSheetPeek = 176.0;
 
 /// The bottom sheet's widest (M3EBottomSheetTheme.maxWidth): centred, so
 /// on wider screens the map shows on both sides of it.
@@ -103,6 +103,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
   // Named in didChangeDependencies, once the locale is known.
   Place from = Place(name: '', position: kCities.first.fallbackCenter.position, isMyLocation: true);
   Place? to;
+  DateTime? planTime;
+  bool planArriveBy = false;
 
   // Departures for the visible map area (idle state).
   List<BoardRow> nearby = [];
@@ -837,7 +839,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (ride == null) _leaveRide();
       final list = ride != null
           ? await routeSearch.searchOnBoard(ride, dest.position, toName: dest.name, live: await _rideLive(ride))
-          : await routeSearch.search(from.position, dest.position, toName: dest.name);
+          : await routeSearch.search(from.position, dest.position, toName: dest.name, time: planTime, arriveBy: planArriveBy);
       if (!mounted || to != dest) return;
       setState(() {
         _routeItineraries = [for (final g in list) ...g.options];
@@ -1927,6 +1929,15 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       fromIsMyLocation: from.isMyLocation,
       fromSuggestions: (_, c) => _suggestions(c, isFrom: true),
       toSuggestions: (_, c) => _suggestions(c, isFrom: false),
+      planningTime: planTime,
+      arriveBy: planArriveBy,
+      onPlanningTimeChanged: (time, arriveBy) {
+        setState(() {
+          planTime = time;
+          planArriveBy = arriveBy;
+        });
+        _plan();
+      },
       onClear: _clearDestination,
       onSwap: _swap,
     );
