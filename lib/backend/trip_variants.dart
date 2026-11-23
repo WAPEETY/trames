@@ -51,21 +51,27 @@ class TripVariants {
       if (!leg.transit) continue;
       final start = i > 0 && !base.legs[i - 1].transit ? i - 1 : i;
       final end = i + 1 < base.legs.length && !base.legs[i + 1].transit ? i + 1 : i;
-      final seen = <String>{leg.tripId ?? '${leg.routeShortName}@${leg.start}'};
       final from = base.legs[start].from, to = base.legs[end].to;
       // The ride you're on can't be swapped, walked or hidden.
       final pinned = leg.onBoard;
       bool keep(Leg ride) => pinned || ride.duration > policy.hideRidesUpTo;
-      final own = keep(leg) ? base.legs.sublist(start, end + 1) : null;
-      final rides = [
-        ?own,
-        for (final alt in leg.alternatives)
-          if (!pinned &&
-              keep(alt.ride) &&
-              alt.reachableFrom(now) &&
-              seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}'))
-            alt.legs,
-      ];
+      String bus(Leg ride) => ride.tripId ?? '${ride.routeShortName ?? ride.mode}@${ride.start}';
+      // One entry per bus: the planner may list the same bus getting off at
+      // different stops (see [_whereToGetOff]); the journey's own bus may
+      // be among them.
+      final ownBus = bus(leg);
+      final versions = <String, List<List<Leg>>>{};
+      if (keep(leg)) versions[ownBus] = [base.legs.sublist(start, end + 1)];
+      for (final alt in leg.alternatives) {
+        if (pinned || !keep(alt.ride) || !alt.reachableFrom(now)) continue;
+        final b = bus(alt.ride);
+        if (b == ownBus && !keep(leg)) continue; // a hidden ride's bus isn't offered
+        (versions[b] ??= []).add(alt.legs);
+      }
+      final picked = {for (final e in versions.entries) e.key: e.value.reduce(_whereToGetOff)};
+      final own = picked[ownBus];
+      if (own != null && !identical(own, versions[ownBus]!.first)) _ownStopMoved = true;
+      final rides = picked.values.toList();
       // By departure: swiping left is sooner, right later (ties keep the
       // planner's order). Walking stays last.
       DateTime departs(List<Leg> v) => v.firstWhere((l) => l.transit).start;
@@ -123,6 +129,12 @@ class TripVariants {
   /// A hidden ride with neither walking nor another ride to replace it.
   late final bool impossible;
 
+  /// Whether a ride of the journey itself gets off elsewhere than the
+  /// planner said (the same bus, see [_whereToGetOff]): [current] then
+  /// differs from [base] even with nothing swapped.
+  bool get ownStopMoved => _ownStopMoved;
+  var _ownStopMoved = false;
+
   /// Whether any original ride is hidden (too short to offer).
   bool get hasHidden => _slots.any((s) => s.hidden);
 
@@ -144,6 +156,30 @@ class TripVariants {
   /// (only planning for later): offered to swipe to, never picked for you.
   bool beforeLeave(int slot, int variant) =>
       !isWalk(slot, variant) && !LegAlternative(_slots[slot].variants[variant]).reachableFrom(_leave);
+
+  /// The same bus, getting off at two different stops ([a] and [b], each
+  /// `[walk, ride, walk]`): get off at the earlier one and walk on only
+  /// when the walking rule says so for the stretch ridden in between
+  /// ([WalkPolicy.walkInsteadOfRide], so "I like walking" decides: e.g.
+  /// a 13-min walk from Nomentana/Sannazzaro, 2 min sooner than riding on
+  /// to Romagnoli/Talenti and walking 9, is too long a walk unless you like
+  /// walking a lot). Otherwise ride on to where there is less to walk.
+  List<Leg> _whereToGetOff(List<Leg> a, List<Leg> b) {
+    Leg ride(List<Leg> v) => v.firstWhere((l) => l.transit);
+    final ra = ride(a), rb = ride(b);
+    if (ra.end == rb.end) return a;
+    final (early, late) = ra.end.isBefore(rb.end) ? (a, b) : (b, a);
+    final off = ride(early);
+    final walkOn = early.skipWhile((l) => !identical(l, off)).skip(1).fold(Duration.zero, (d, l) => d + l.duration);
+    return policy.walkInsteadOfRide(
+      rideDuration: ride(late).end.difference(off.end),
+      rideArrival: late.last.end,
+      walkArrival: early.last.end,
+      walk: walkOn,
+    )
+        ? early
+        : late;
+  }
 
   int _firstOnTime(int slot) {
     final n = _slots[slot].variants.length;

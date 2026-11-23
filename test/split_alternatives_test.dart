@@ -94,8 +94,8 @@ void main() {
   });
 
   test('its other rides get the same trimming as every journey', () async {
-    // A 61 alighting far from the 60's stop is no alternative to the 60.
-    final far61 = LegAlternative([_walk(_change, _change, 68, 70), _ride('61', 'x', _change, _verano, 70, 90), _walk(_verano, _end, 90, 110)]);
+    // A 61 boarding far from the 60's stop is no alternative to the 60.
+    final far61 = LegAlternative([_walk(_change, _verano, 66, 72), _ride('61', 'x', _verano, _end, 72, 95), _walk(_end, _end, 95, 95)]);
     final trip = _trip(alts);
     final withFar = trip.withLegs([...trip.legs.take(3), trip.legs[3].withAlternatives([far61]), trip.legs[4]]);
     final groups = await RouteSearch(_OnePlanner([withFar]),
@@ -103,6 +103,30 @@ void main() {
         .search(_home, _end);
     final row = groups.firstWhere((g) => g.signature == '88 › 60').best;
     expect(row.transitLegs.last.alternatives, isEmpty);
+  });
+
+  test('last ride: an alternative getting off elsewhere stays (it walks you home)', () {
+    const terminus = LatLng(41.9450, 12.5600); // ~600 m from _end
+    final to60 = LegAlternative([_walk(_change, _change, 72, 73), _ride('60', 'late', _change, terminus, 73, 101), _walk(terminus, _end, 101, 108)]);
+    final trip = _trip(const []);
+    final it = trip.withLegs([...trip.legs.take(3), trip.legs[3].withAlternatives([to60]), trip.legs[4]]);
+    expect(search.trimAlternatives(it).legs[3].alternatives.single.ride.tripId, 'late');
+  });
+
+  test('at a change: an alternative getting off elsewhere is still left out', () {
+    final elsewhere = LegAlternative([_walk(_home, _reti, 44, 45), _ride('3', 'c', _reti, _verano, 45, 50), _walk(_verano, _change, 50, 60)]);
+    expect(search.trimAlternatives(_trip([elsewhere])).legs[1].alternatives, isEmpty);
+  });
+
+  test('the same journey from two profiles: one, with every alternative either found', () {
+    final a = _trip([_bus88(55)]);
+    final b = _trip([_bus88(49)]);
+    final merged = RouteSearch.mergeSameJourneys([a, b]);
+    expect(merged, hasLength(1));
+    expect(merged.single.legs[1].alternatives.map((x) => x.ride.start), [_m(55), _m(49)]);
+    // Different buses: still two journeys.
+    final other = _trip(const []).withLegs([..._trip(const []).legs.take(3), _ride('61', 'z', _change, _end, 68, 91), _trip(const []).legs.last]);
+    expect(RouteSearch.mergeSameJourneys([a, other]), hasLength(2));
   });
 
   test('in the list: a row of its own next to the 19L one', () async {

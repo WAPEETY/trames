@@ -1,7 +1,9 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:maplibre_gl/maplibre_gl.dart';
 import 'package:roma_transit/backend/models.dart';
+import 'package:roma_transit/backend/preferences.dart';
 import 'package:roma_transit/backend/trip_variants.dart';
+import 'package:roma_transit/backend/walk_rules.dart';
 
 final _t0 = DateTime(2026, 11, 12, 8);
 DateTime _m(int min) => _t0.add(Duration(minutes: min));
@@ -104,6 +106,54 @@ void main() {
     final early = LegAlternative([_walk(1, 3), _ride('3', 'c', 3, 9), _walk(9, 12)]);
     final v = TripVariants(base(first: [early]), clock: () => _t0, when: PlanTime(time: _m(50), arriveBy: true));
     expect(v.variantCount(0), 2);
+  });
+
+  group('the same bus, two stops to get off at', () {
+    // The 60 'x' at 20: off at 41 and walk 13 min (home 54), or ride on 6 min
+    // to 47 and walk 9 (home 56). As Nomentana/Sannazzaro vs Romagnoli/Talenti.
+    final early = LegAlternative([_walk(10, 12), _ride('60', 'x', 20, 41), _walk(41, 54)]);
+    final late = LegAlternative([_walk(10, 12), _ride('60', 'x', 20, 47), _walk(47, 56)]);
+    DateTime offAt(WalkPolicy p, List<LegAlternative> alts) {
+      final v = TripVariants(base(second: alts), clock: () => _t0, policy: p);
+      expect(v.variantCount(1), 2); // the 60 'b' and one 'x', not two
+      final k = [for (var k = 0; k < 2; k++) k].firstWhere((k) => v.rideOf(1, k).tripId == 'x');
+      return v.rideOf(1, k).end;
+    }
+
+    test('13 min of walking to arrive 2 min sooner: only if you like walking a lot', () {
+      expect(offAt(WalkLiking.notAtAll.policy, [early, late]), _m(47));
+      expect(offAt(WalkLiking.aBit.policy, [early, late]), _m(47));
+      expect(offAt(WalkLiking.aLot.policy, [late, early]), _m(41)); // whichever the planner lists first
+    });
+
+    test('a 10-min walk, 2 min sooner: fine if you like walking a bit', () {
+      final early10 = LegAlternative([_walk(10, 12), _ride('60', 'x', 20, 41), _walk(41, 51)]);
+      final late53 = LegAlternative([_walk(10, 12), _ride('60', 'x', 20, 47), _walk(47, 53)]);
+      expect(offAt(WalkLiking.notAtAll.policy, [early10, late53]), _m(47));
+      expect(offAt(WalkLiking.aBit.policy, [early10, late53]), _m(41));
+    });
+
+    test('3 min of riding saved, walking 1 min later: as the short-ride rule says', () {
+      final early8 = LegAlternative([_walk(10, 12), _ride('60', 'x', 20, 41), _walk(41, 49)]);
+      final late3 = LegAlternative([_walk(10, 12), _ride('60', 'x', 20, 44), _walk(44, 48)]);
+      expect(offAt(WalkLiking.notAtAll.policy, [early8, late3]), _m(44));
+      expect(offAt(WalkLiking.aBit.policy, [early8, late3]), _m(41));
+    });
+
+    test('the journey\'s own bus too: its stop moves, and it says so', () {
+      // The planner's own 60 'b' gets off early (walk 13); the same bus, to
+      // a later stop, is among its alternatives.
+      final it = Itinerary(start: _m(0), end: _m(54), transfers: 1, legs: [
+        _walk(0, 4), _ride('88', 'a', 4, 10), _walk(10, 12),
+        _ride('60', 'b', 20, 41, alts: [LegAlternative([_walk(10, 12), _ride('60', 'b', 20, 47), _walk(47, 56)])]),
+        _walk(41, 54),
+      ]);
+      final v = TripVariants(it, clock: () => _t0, policy: WalkLiking.aBit.policy);
+      expect(v.variantCount(1), 1);
+      expect(v.current.transitLegs.last.end, _m(47));
+      expect(v.ownStopMoved, isTrue);
+      expect(TripVariants(it, clock: () => _t0, policy: WalkLiking.aLot.policy).ownStopMoved, isFalse);
+    });
   });
 
   test('alternative identical to the chosen ride is not offered twice', () {

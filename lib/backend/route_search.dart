@@ -167,6 +167,7 @@ class RouteSearch {
   /// judged), then grouping.
   Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName,
       {OnBoardTrip? riding, PlanTime when = const PlanTime()}) async {
+    raw = mergeSameJourneys(raw);
     final rides = [for (final it in raw) ...it.transitLegs];
     var all = [
       for (final it in raw) ...[
@@ -194,7 +195,12 @@ class RouteSearch {
   }
 
   /// Keeps only alternatives that board and get off near the planned ride's
-  /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]). Those the
+  /// stops ([WalkPolicy.maxAlternativeStopDistanceMeters]): a change stays
+  /// where it is, and you board where the journey says (those boarding
+  /// elsewhere become journeys, see [splitFarAlternatives]). On the last
+  /// ride where you get off doesn't matter: the planner picks, per bus, the
+  /// stop that gets you there first and walks you on (the later 60s to the
+  /// Lgo Pugliese terminus, 543 m from home instead of 886 m). Those the
   /// planner says have left stay: a bus running late may still be caught,
   /// and only its live time tells (see [applyLiveTimes]; [TripVariants]
   /// offers a ride only while it can be reached).
@@ -207,7 +213,7 @@ class RouteSearch {
   /// the trip as planned), the others its alternatives to swipe to. Its
   /// ride is the one arriving first, then leaving latest, among those you
   /// don't have to leave before [when]'s time for (any, when none is).
-  /// Those alighting far are still left out for now.
+  /// Those alighting far, at a change, are still left out for now.
   List<Itinerary> splitFarAlternatives(Itinerary it, {PlanTime when = const PlanTime()}) {
     final max = policy.maxAlternativeStopDistanceMeters;
     bool near(LatLng a, LatLng b) => distanceMeters(a, b) <= max;
@@ -217,7 +223,7 @@ class RouteSearch {
       if (!l.transit || l.onBoard) continue;
       final far = [
         for (final a in l.alternatives)
-          if (!near(a.ride.from, l.from) && near(a.ride.to, l.to) && a.reachableFrom(now)) a,
+          if (!near(a.ride.from, l.from) && (_lastRide(it, i) || near(a.ride.to, l.to)) && a.reachableFrom(now)) a,
       ];
       // Boarding near each other: one journey.
       final clusters = <List<LegAlternative>>[];
@@ -254,6 +260,47 @@ class RouteSearch {
     return out;
   }
 
+  /// The profiles can find the same journey (same buses) with different
+  /// alternatives: "less walking" lists the 60 to Romagnoli/Talenti where
+  /// the others list the same bus to Nomentana/Sannazzaro. One journey,
+  /// every alternative any of them found (the stop to get off at is then
+  /// chosen per bus, see TripVariants).
+  static List<Itinerary> mergeSameJourneys(List<Itinerary> raw) {
+    String key(Itinerary it) => it.walkOnly
+        ? 'walk@${it.start}'
+        : it.transitLegs.map((l) => '${l.tripId ?? l.routeShortName}@${l.start}|${l.fromStopId ?? l.fromName}|${l.toStopId ?? l.toName}').join(',');
+    String altKey(LegAlternative a) => '${a.ride.tripId ?? a.line}@${a.ride.start}|${a.ride.toStopId ?? a.ride.toName}';
+    final byKey = <String, Itinerary>{};
+    for (final it in raw) {
+      final k = key(it);
+      final had = byKey[k];
+      if (had == null) {
+        byKey[k] = it;
+        continue;
+      }
+      // Same rides in the same order (the walks around them may differ).
+      final theirs = it.transitLegs.toList();
+      var r = 0;
+      final legs = [
+        for (final l in had.legs)
+          if (!l.transit)
+            l
+          else
+            () {
+              final other = theirs[r++];
+              final seen = {for (final a in l.alternatives) altKey(a)};
+              final more = [for (final a in other.alternatives) if (seen.add(altKey(a))) a];
+              return more.isEmpty ? l : l.withAlternatives([...l.alternatives, ...more]);
+            }(),
+      ];
+      byKey[k] = had.withLegs(legs);
+    }
+    return byKey.values.toList();
+  }
+
+  /// Whether leg [i] of [it] is its last ride (only walking after it).
+  static bool _lastRide(Itinerary it, int i) => !it.legs.skip(i + 1).any((l) => l.transit);
+
   /// Rule 1: right after a ride on line X, an alternative on X is pointless
   /// when [rides] (every ride of every journey found) include a direct X
   /// from that ride's boarding stop to this leg's destination: staying on
@@ -284,7 +331,7 @@ class RouteSearch {
               for (final a in l.alternatives)
                 if (!(stayOnWorks && a.line == line(prev)) &&
                     near(a.ride.from, l.from) &&
-                    near(a.ride.to, l.to))
+                    (_lastRide(it, i) || near(a.ride.to, l.to)))
                   a,
             ];
             if (keep.length == l.alternatives.length) return l;
@@ -362,7 +409,7 @@ class RouteSearch {
       keep.add(tv);
     }
     return [
-      for (final tv in keep) tv.current.walkSlots.isEmpty && !tv.hasHidden ? tv.base : tv.current,
+      for (final tv in keep) tv.current.walkSlots.isEmpty && !tv.hasHidden && !tv.ownStopMoved ? tv.base : tv.current,
       ...all.where((it) => it.walkOnly),
     ];
   }
