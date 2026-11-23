@@ -75,6 +75,22 @@ void main() {
     expect(v.rideOf(0, 2).tripId, 'e');
   });
 
+  test('leaving at a later time, alternatives before it are not offered', () {
+    // Now is 8:00, you leave at 8:06: as if it were 8:06.
+    final gone = LegAlternative([_walk(3, 5), _ride('3', 'c', 5, 11), _walk(11, 14)]);
+    final missed = LegAlternative([_walk(5, 7), _ride('3', 'd', 7, 12), _walk(12, 14)]);
+    final ok = LegAlternative([_walk(7, 9), _ride('3', 'e', 9, 12), _walk(12, 14)]);
+    final v = TripVariants(base(first: [gone, missed, ok]), clock: () => _t0, when: PlanTime(time: _m(6)));
+    expect(v.variantCount(0), 3);
+    expect(v.rideOf(0, 2).tripId, 'e');
+  });
+
+  test('arriving by a time, any alternative still ahead of now is offered', () {
+    final early = LegAlternative([_walk(1, 3), _ride('3', 'c', 3, 9), _walk(9, 12)]);
+    final v = TripVariants(base(first: [early]), clock: () => _t0, when: PlanTime(time: _m(50), arriveBy: true));
+    expect(v.variantCount(0), 2);
+  });
+
   test('alternative identical to the chosen ride is not offered twice', () {
     final same = LegAlternative([_walk(0, 4), _ride('88', 'a', 4, 10), _walk(10, 12)]);
     expect(TripVariants(clock: () => _t0, base(first: [same])).variantCount(0), 1);

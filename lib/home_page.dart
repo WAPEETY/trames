@@ -39,8 +39,8 @@ const kMapStyleDark = 'https://tiles.openfreemap.org/styles/fiord';
 const kLegPalette = ['#D81B60', '#1E88E5', '#43A047', '#FB8C00', '#8E24AA', '#00897B'];
 const kWalkColor = '#9E9E9E';
 
-/// Sheet peek: drag handle + destination search bar and time controls.
-const kSheetPeek = 176.0;
+/// Sheet peek: drag handle + destination search bar.
+const kSheetPeek = 128.0;
 
 /// The bottom sheet's widest (M3EBottomSheetTheme.maxWidth): centred, so
 /// on wider screens the map shows on both sides of it.
@@ -290,10 +290,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       return;
     }
     // The open journey moves with its buses, keeping the rides chosen.
-    final now = applyLiveTimes(v.current, _liveOf, walks: walkCache, policy: appSettings.walkPolicy);
+    final now = applyLiveTimes(v.current, _liveOf, walks: walkCache, policy: appSettings.walkPolicy, when: _planWhen);
     if (!identical(now, v.current)) {
       variants = TripVariants(now.base!,
-          walks: walkCache, walkSlots: now.walkSlots, choices: now.rideChoices, policy: appSettings.walkPolicy);
+          walks: walkCache,
+          walkSlots: now.walkSlots,
+          choices: now.rideChoices,
+          policy: appSettings.walkPolicy,
+          when: _planWhen);
       final swapped = !_sameRides(now, selected!);
       selected = now;
       if (swapped) {
@@ -375,7 +379,8 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // and on the surest buses its rides can swap to (live, then
       // estimated, then timetable) when those differ; both are listed,
       // each in its section.
-      liveJourneys(_routeItineraries, _liveOf, walks: walkCache, policy: appSettings.walkPolicy, sureness: _sureness),
+      liveJourneys(_routeItineraries, _liveOf,
+          walks: walkCache, policy: appSettings.walkPolicy, when: _planWhen, sureness: _sureness),
       // A missed journey is a row of its own, so the next buses of its
       // lines keep theirs (and their place in the section).
       sectionOf: (it) => it.missedConnection ? '${_journeyKind(it)}|missed' : _journeyKind(it),
@@ -501,6 +506,10 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     // Nearby boards every 30 s while idle; routes every 60 s while listing.
     refreshTimer = Timer.periodic(const Duration(seconds: 30), (t) {
       tramite.loadCoverage(); // no-op once known; retries while unreachable
+      if (_expirePlanTime() && to != null && selected == null && !planning) {
+        _plan(silent: true);
+        return;
+      }
       if (line != null) {
         // the line's buses are pushed
       } else if (to == null) {
@@ -820,9 +829,24 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     _refreshArea();
   }
 
+  /// When the journeys are planned for (the time chosen, or leave now).
+  PlanTime get _planWhen => PlanTime(time: planTime, arriveBy: planArriveBy);
+
+  /// A chosen time that has come: back to "leave now", as if never set.
+  /// True when it changed.
+  bool _expirePlanTime() {
+    if (!PlanTime(time: planTime, arriveBy: planArriveBy).passed(DateTime.now())) return false;
+    setState(() {
+      planTime = null;
+      planArriveBy = false;
+    });
+    return true;
+  }
+
   Future<void> _plan({bool silent = false}) async {
     final dest = to;
     if (dest == null) return;
+    _expirePlanTime();
     // The walking pace (setting or newly learned) applies from this search.
     if (useWalkingSpeed(appSettings.walkingSpeedKmh)) walkCache?.clear();
     _leaveBrowsing();
@@ -839,7 +863,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       if (ride == null) _leaveRide();
       final list = ride != null
           ? await routeSearch.searchOnBoard(ride, dest.position, toName: dest.name, live: await _rideLive(ride))
-          : await routeSearch.search(from.position, dest.position, toName: dest.name, time: planTime, arriveBy: planArriveBy);
+          : await routeSearch.search(from.position, dest.position, toName: dest.name, when: _planWhen);
       if (!mounted || to != dest) return;
       setState(() {
         _routeItineraries = [for (final g in list) ...g.options];
@@ -1648,7 +1672,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     // Rebuild the swipeable trip from the planner's original, with the rides
     // the walk rules replaced still walked by default.
     final v = TripVariants(it.base ?? it,
-        walks: walkCache, walkSlots: it.walkSlots, choices: it.rideChoices, policy: appSettings.walkPolicy);
+        walks: walkCache,
+        walkSlots: it.walkSlots,
+        choices: it.rideChoices,
+        policy: appSettings.walkPolicy,
+        when: _planWhen);
     setState(() {
       variants = v;
       selected = v.current;
@@ -1929,12 +1957,12 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       fromIsMyLocation: from.isMyLocation,
       fromSuggestions: (_, c) => _suggestions(c, isFrom: true),
       toSuggestions: (_, c) => _suggestions(c, isFrom: false),
-      planningTime: planTime,
-      arriveBy: planArriveBy,
-      onPlanningTimeChanged: (time, arriveBy) {
+      planTime: PlanTime(time: planTime, arriveBy: planArriveBy),
+      onOpen: () => sheet.animateTo(M3EBottomSheetValue.expanded),
+      onPlanTimeChanged: (p) {
         setState(() {
-          planTime = time;
-          planArriveBy = arriveBy;
+          planTime = p.time;
+          planArriveBy = p.arriveBy;
         });
         _plan();
       },

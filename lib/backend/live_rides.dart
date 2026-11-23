@@ -92,6 +92,7 @@ Itinerary applyLiveTimes(
   WalkCache? walks,
   WalkPolicy policy = kWalkPolicy,
   DateTime Function()? clock,
+  PlanTime when = const PlanTime(),
   int maxCombinations = 200,
   bool earlier = false,
   bool surest = false,
@@ -122,7 +123,7 @@ Itinerary applyLiveTimes(
       start: base.start, end: base.end, legs: legs, transfers: base.transfers, hiddenBecause: base.hiddenBecause);
 
   final tv = TripVariants(liveBase,
-      walks: walks, walkSlots: it.walkSlots, choices: it.rideChoices, policy: policy, clock: clock);
+      walks: walks, walkSlots: it.walkSlots, choices: it.rideChoices, policy: policy, clock: clock, when: when);
 
   int rideCount(int slot) => tv.variantCount(slot) - (tv.walkIndex(slot) == null ? 0 : 1);
 
@@ -346,10 +347,11 @@ List<Itinerary> liveJourneys(
   WalkCache? walks,
   WalkPolicy policy = kWalkPolicy,
   DateTime Function()? clock,
+  PlanTime when = const PlanTime(),
   int Function(Leg ride)? sureness,
 }) {
   Itinerary at(Itinerary it, {bool earlier = false, bool surest = false}) => applyLiveTimes(it, liveOf,
-      walks: walks, policy: policy, clock: clock, earlier: earlier, surest: surest, sureness: sureness);
+      walks: walks, policy: policy, clock: clock, when: when, earlier: earlier, surest: surest, sureness: sureness);
   bool listed(Itinerary it) => !firstRideGone(it, liveOf);
   final plain = [for (final it in planned) at(it)];
   bool beaten(Itinerary it, int by) {

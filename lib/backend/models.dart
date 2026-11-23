@@ -102,6 +102,30 @@ class OnBoardRide {
   final String headsign;
 }
 
+/// When a journey is planned: [time] null means "leave now".
+class PlanTime {
+  const PlanTime({this.time, this.arriveBy = false});
+
+  final DateTime? time;
+
+  /// Whether [time] is an arrival deadline instead of a departure time.
+  final bool arriveBy;
+
+  /// A chosen time that is no longer ahead of [now] (to the minute): as if
+  /// it had never been set.
+  bool passed(DateTime now) {
+    final t = time;
+    return t != null && !t.isAfter(DateTime(now.year, now.month, now.day, now.hour, now.minute));
+  }
+
+  /// When you set off at the earliest: the chosen departure, else [now]
+  /// (arriving by a time, you may leave any time from now).
+  DateTime leaveFrom(DateTime now) {
+    final t = time;
+    return !arriveBy && t != null && t.isAfter(now) ? t : now;
+  }
+}
+
 /// Knobs a planner may honour. Backends map these to their own parameters
 /// and ignore what they cannot do.
 class PlanOptions {

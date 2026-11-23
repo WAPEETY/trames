@@ -143,28 +143,30 @@ class RouteSearch {
   }
 
   /// Journeys from [from] to [to] ([toName] names the last walk).
-  Future<List<RouteGroup>> search(LatLng from, LatLng to, {String toName = '', DateTime? time, bool arriveBy = false}) async {
+  /// [when] is when the journey is planned for (leave now by default).
+  Future<List<RouteGroup>> search(LatLng from, LatLng to, {String toName = '', PlanTime when = const PlanTime()}) async {
     Object? firstError;
     final batches = await Future.wait(profiles.map((p) async {
       try {
-        return await planner.plan(from, to, options: p.options.copyWith(time: time, arriveBy: arriveBy));
+        return await planner.plan(from, to, options: p.options.copyWith(time: when.time, arriveBy: when.arriveBy));
       } catch (e) {
         firstError ??= e;
         return <Itinerary>[];
       }
     }));
     if (batches.every((b) => b.isEmpty) && firstError != null) throw firstError!;
-    return _finish(batches.expand((b) => b).toList(), to, toName);
+    return _finish(batches.expand((b) => b).toList(), to, toName, when: when);
   }
 
   /// Rule 1 on the alternatives, then the walking rule, then rule 2 on the
   /// journeys as they will be shown (buses replaced by a walk are not
   /// judged), then grouping.
-  Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName, {OnBoardTrip? riding}) async {
+  Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName,
+      {OnBoardTrip? riding, PlanTime when = const PlanTime()}) async {
     final rides = [for (final it in raw) ...it.transitLegs];
     var all = [for (final it in raw) trimAlternatives(it, rides: rides)];
     final cache = walks, details = trips;
-    if (cache != null) all = await applyWalkRules(all);
+    if (cache != null) all = await applyWalkRules(all, when: when);
     if (cache != null && details != null) {
       all = await checkStayingOn(
         all,
@@ -234,15 +236,17 @@ class RouteSearch {
   /// [WalkPolicy.maxWalkKm] long, the street walk over that span is fetched
   /// (cached, at most [WalkPolicy.maxWalkRequests] per search, earliest
   /// itineraries first). Arrivals are compared from when you could start
-  /// walking (now for the first ride, else when the previous ride arrives),
-  /// so waiting for the bus counts. Rides are only replaced when the rest of
+  /// walking (for the first ride when you set off, [PlanTime.leaveFrom],
+  /// else when the previous ride arrives), so waiting for the bus counts.
+  /// Arriving by a time you choose when to leave, so there is no wait: the
+  /// first ride's walk is compared from when the journey sets off. Rides are only replaced when the rest of
   /// the trip still connects; the original stays in [Itinerary.base].
-  Future<List<Itinerary>> applyWalkRules(List<Itinerary> all) async {
+  Future<List<Itinerary>> applyWalkRules(List<Itinerary> all, {PlanTime when = const PlanTime()}) async {
     final cache = walks;
     if (cache == null) return all;
-    final now = _clock();
+    final leave = when.leaveFrom(_clock());
     final transit = all.where((it) => !it.walkOnly).toList()..sort(_byArrival);
-    final tvs = [for (final it in transit) TripVariants(it, walks: cache, policy: policy, clock: _clock)];
+    final tvs = [for (final it in transit) TripVariants(it, walks: cache, policy: policy, clock: _clock, when: when)];
 
     // Rides too short to show must be replaced: their walks come first.
     await cache.fetch([
@@ -266,7 +270,7 @@ class RouteSearch {
         final (from, to) = tv.slotSpan(s);
         final route = cache.lookup(from, to);
         if (route == null) continue; // unknown: keep the ride, never guess
-        final start = s == 0 ? now : tv.spanStart(s);
+        final start = s == 0 && !when.arriveBy ? leave : tv.spanStart(s);
         final walkArrival = start.add(route.duration);
         if (!policy.walkInsteadOfRide(
           rideDuration: tv.slotRide(s).duration,

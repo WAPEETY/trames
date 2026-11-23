@@ -24,12 +24,13 @@ Leg _ride(String line, String trip, LatLng f, LatLng t, num a, num b) => Leg(
     from: f, to: t, points: [f, t], distanceMeters: 0, routeShortName: line, tripId: trip);
 
 /// walk 0-4, 19BUS 4-6 (2-min ride), walk 6-8, 71 12-30, walk 30-33
-Itinerary _trip() => Itinerary(start: _m(0), end: _m(33), transfers: 1, legs: [
-      _walk(_o, _a, 0, 4),
-      _ride('19BUS', 'r1', _a, _b, 4, 6),
-      _walk(_b, _c, 6, 8),
-      _ride('71', 'r2', _c, _d, 12, 30),
-      _walk(_d, _e, 30, 33),
+/// ([at] minutes later for a journey planned for later).
+Itinerary _trip({num at = 0}) => Itinerary(start: _m(at), end: _m(at + 33), transfers: 1, legs: [
+      _walk(_o, _a, at + 0, at + 4),
+      _ride('19BUS', 'r1', _a, _b, at + 4, at + 6),
+      _walk(_b, _c, at + 6, at + 8),
+      _ride('71', 'r2', _c, _d, at + 12, at + 30),
+      _walk(_d, _e, at + 30, at + 33),
     ]);
 
 class _FakeWalks implements WalkRouter {
@@ -144,6 +145,59 @@ void main() {
       final it = groups.single.best;
       expect(_shape(it), ['walk', '19BUS', 'walk']);
       expect(it.end, _m(31));
+    });
+  });
+
+  group('planned for another time (now 08:00)', () {
+    // The trip leaves at 10:00: walk 10:00-10:04, 19BUS 10:04-10:06, ...
+    final later = _trip(at: 120);
+
+    Future<TripVariants> walkedWhole(PlanTime when) async {
+      final cache = WalkCache(_FakeWalks({walkKey(_o, _c): 9, walkKey(_b, _e): 15, walkKey(_o, _e): 22}));
+      await cache.fetch([(_o, _c), (_b, _e), (_o, _e)]);
+      final v = TripVariants(later, walks: cache, clock: _clock, when: when);
+      v.choose(0, v.walkIndex(0)!);
+      v.choose(1, v.walkIndex(1)!);
+      return v;
+    }
+
+    test('walking the whole way leaves at the chosen departure, not now', () async {
+      final v = await walkedWhole(PlanTime(time: _m(120)));
+      expect(_shape(v.current), ['walk']);
+      expect(v.current.start, _m(120));
+      expect(v.feasible, isTrue);
+    });
+
+    test('arriving by a time, walking the whole way arrives when the bus would', () async {
+      final v = await walkedWhole(PlanTime(time: _m(160), arriveBy: true));
+      expect(_shape(v.current), ['walk']);
+      expect(v.current.end, _m(153));
+      expect(v.current.start, _m(131));
+    });
+
+    Future<List<RouteGroup>> search(Map<String, num> walkMinutes, PlanTime when) => RouteSearch(
+          _OnePlanner([later]),
+          profiles: const [PlanProfile('default', PlanOptions())],
+          walks: WalkCache(_FakeWalks(walkMinutes)),
+          clock: _clock,
+        ).search(_o, _e, when: when);
+
+    test('a short first ride is kept when walking from the departure is much slower', () async {
+      // From 10:00, 11.5 min to the 71 stop: 10:11:30, the bus way 10:08.
+      final groups = await search({walkKey(_o, _c): 11.5, walkKey(_b, _e): 40}, PlanTime(time: _m(120)));
+      expect(_shape(groups.single.best), ['walk', '19BUS', 'walk', '71', 'walk']);
+    });
+
+    test('a short first ride is still walked when walking from the departure is about as fast', () async {
+      final groups = await search({walkKey(_o, _c): 9, walkKey(_b, _e): 40}, PlanTime(time: _m(120)));
+      expect(_shape(groups.single.best), ['walk', '71', 'walk']);
+    });
+
+    test('arriving by a time: compared from when the journey sets off, no waiting', () async {
+      final kept = await search({walkKey(_o, _c): 11.5, walkKey(_b, _e): 40}, PlanTime(time: _m(160), arriveBy: true));
+      expect(_shape(kept.single.best), ['walk', '19BUS', 'walk', '71', 'walk']);
+      final walked = await search({walkKey(_o, _c): 9, walkKey(_b, _e): 40}, PlanTime(time: _m(160), arriveBy: true));
+      expect(_shape(walked.single.best), ['walk', '71', 'walk']);
     });
   });
 

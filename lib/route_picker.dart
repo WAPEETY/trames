@@ -4,6 +4,7 @@ import 'package:flutter/physics.dart';
 import 'package:material_3_expressive/material_3_expressive.dart';
 import 'package:material_ui/material_ui.dart' hide CornerRounding, RoundedPolygon;
 
+import 'plan_time.dart';
 import 'sheet_widgets.dart' show emphasized;
 import 'l10n.dart';
 
@@ -24,9 +25,9 @@ class RoutePicker extends StatefulWidget {
     required this.fromIsMyLocation,
     required this.fromSuggestions,
     required this.toSuggestions,
-    this.planningTime,
-    this.arriveBy = false,
-    this.onPlanningTimeChanged,
+    this.planTime = const PlanTime(),
+    this.onPlanTimeChanged,
+    this.onOpen,
     this.onSwap,
     this.onClear,
   });
@@ -39,9 +40,11 @@ class RoutePicker extends StatefulWidget {
   final bool fromIsMyLocation;
   final M3ESearchSuggestionsBuilder fromSuggestions;
   final M3ESearchSuggestionsBuilder toSuggestions;
-  final DateTime? planningTime;
-  final bool arriveBy;
-  final void Function(DateTime? time, bool arriveBy)? onPlanningTimeChanged;
+  final PlanTime planTime;
+  final ValueChanged<PlanTime>? onPlanTimeChanged;
+
+  /// Opens the sheet fully, showing the "From" and time rows.
+  final VoidCallback? onOpen;
   final VoidCallback? onSwap;
   final VoidCallback? onClear;
 
@@ -120,13 +123,29 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                     iconColor: p > 0.5 || widget.toLabel != null ? cs.error : cs.onSurfaceVariant,
                     text: widget.toLabel,
                     hint: context.l10n.whereTo,
-                    trailing: widget.toLabel != null
-                        ? IconButton(
-                            tooltip: context.l10n.clearDestination,
-                            icon: const Icon(Icons.close_rounded),
-                            onPressed: widget.onClear,
-                          )
-                        : null,
+                    trailing: Row(mainAxisSize: MainAxisSize.min, children: [
+                      // Clock (or the chosen time) while collapsed: opens the
+                      // sheet, then gives way to the time row and swap button.
+                      if (p < 0.95)
+                        ClipRect(
+                          child: Align(
+                            alignment: Alignment.centerLeft,
+                            widthFactor: 1 - p,
+                            child: Opacity(
+                              opacity: 1 - p,
+                              child: Transform.scale(scale: 1 - 0.4 * p, child: _timeChip()),
+                            ),
+                          ),
+                        ),
+                      if (widget.toLabel != null)
+                        IconButton(
+                          tooltip: context.l10n.clearDestination,
+                          icon: const Icon(Icons.close_rounded),
+                          onPressed: widget.onClear,
+                        )
+                      else
+                        SizedBox(width: 8 * (1 - p) + 16 * p),
+                    ]),
                   ),
                 ]),
               ),
@@ -149,8 +168,20 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                       ),
               ),
             ]),
-              Divider(height: 1, indent: 16, endIndent: 16, color: cs.outlineVariant),
-              _timeRow(),
+              // Time row: shown with the "From" row, below the destination.
+              ClipRect(
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  heightFactor: t.clamp(0.0, 1.08),
+                  child: Opacity(
+                    opacity: Curves.easeIn.transform(p),
+                    child: Column(mainAxisSize: MainAxisSize.min, children: [
+                      Divider(height: 1, indent: 56, color: cs.outlineVariant),
+                      _timeRow(),
+                    ]),
+                  ),
+                ),
+              ),
             ]),
           ),
         );
@@ -158,66 +189,68 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
     );
   }
 
-  Widget _timeRow() {
+  /// Clock alone for "now"; a tonal chip with the time once it is changed.
+  Widget _timeChip() {
     final cs = Theme.of(context).colorScheme;
-    final l = context.l10n;
-    final localizations = MaterialLocalizations.of(context);
-    final time = widget.planningTime;
-    final label = time == null
-        ? l.now
-        : '${localizations.formatMediumDate(time)} · ${localizations.formatTimeOfDay(TimeOfDay.fromDateTime(time))}';
-
-    return SizedBox(
-      height: 48,
-      child: Row(children: [
-        Expanded(
-          child: InkWell(
-            onTap: () async {
-              final now = DateTime.now();
-              final initial = widget.planningTime ?? now;
-              final date = await showDatePicker(
-                context: context,
-                initialDate: initial,
-                firstDate: now.subtract(const Duration(days: 365)),
-                lastDate: now.add(const Duration(days: 365)),
-              );
-              if (date == null || !mounted) return;
-
-              final timeOfDay = await showTimePicker(
-                context: context,
-                initialTime: TimeOfDay.fromDateTime(initial),
-              );
-              if (timeOfDay == null || !mounted) return;
-
-              widget.onPlanningTimeChanged?.call(
-                DateTime(date.year, date.month, date.day, timeOfDay.hour, timeOfDay.minute),
-                widget.arriveBy,
-              );
-            },
-            child: Row(children: [
-              const SizedBox(width: 16),
-              Icon(Icons.schedule_rounded, size: 20, color: cs.onSurfaceVariant),
-              const SizedBox(width: 16),
-              Expanded(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis)),
+    final short = planTimeShort(context, widget.planTime);
+    if (short == null) {
+      return IconButton(
+        tooltip: context.l10n.planTimeTitle,
+        icon: Icon(Icons.schedule_rounded, color: cs.onSurfaceVariant),
+        onPressed: widget.onOpen,
+      );
+    }
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Material(
+        color: cs.secondaryContainer,
+        shape: const StadiumBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: InkWell(
+          onTap: widget.onOpen,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 6, 12, 6),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.schedule_rounded, size: 18, color: cs.onSecondaryContainer),
+              const SizedBox(width: 6),
+              Text(short,
+                  maxLines: 1,
+                  softWrap: false,
+                  style: Theme.of(context).textTheme.labelLarge?.copyWith(color: cs.onSecondaryContainer)),
             ]),
           ),
         ),
-        if (time != null)
-          IconButton(
-            tooltip: l.now,
-            icon: const Icon(Icons.close_rounded, size: 18),
-            onPressed: () => widget.onPlanningTimeChanged?.call(null, widget.arriveBy),
+      ),
+    );
+  }
+
+  Widget _timeRow() {
+    final cs = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: () async {
+        final picked = await showPlanTimeDialog(context, widget.planTime);
+        if (picked != null && mounted) widget.onPlanTimeChanged?.call(picked);
+      },
+      child: SizedBox(
+        height: 48,
+        child: Row(children: [
+          const SizedBox(width: 16),
+          Icon(Icons.schedule_rounded, color: cs.onSurfaceVariant),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Text(
+              planTimeLabel(context, widget.planTime),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                    color: widget.planTime.time == null ? cs.onSurfaceVariant : cs.onSurface,
+                  ),
+            ),
           ),
-        Checkbox(
-          value: widget.arriveBy,
-          onChanged: (value) => widget.onPlanningTimeChanged?.call(widget.planningTime, value ?? false),
-        ),
-        TextButton(
-          onPressed: () => widget.onPlanningTimeChanged?.call(widget.planningTime, !widget.arriveBy),
-          child: Text(l.arriveBy),
-        ),
-        const SizedBox(width: 8),
-      ]),
+          Icon(Icons.arrow_drop_down_rounded, color: cs.onSurfaceVariant),
+          const SizedBox(width: 16),
+        ]),
+      ),
     );
   }
 

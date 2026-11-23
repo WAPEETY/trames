@@ -38,8 +38,9 @@ class TripVariants {
     List<int>? choices,
     this.policy = kWalkPolicy,
     DateTime Function()? clock,
+    this.when = const PlanTime(),
   }) : _clock = clock ?? DateTime.now {
-    final now = _clock();
+    final leave = when.leaveFrom(_clock());
     for (var i = 0; i < base.legs.length; i++) {
       final leg = base.legs[i];
       if (!leg.transit) continue;
@@ -58,7 +59,7 @@ class TripVariants {
           for (final alt in leg.alternatives)
             if (!pinned &&
                 keep(alt.ride) &&
-                alt.reachableFrom(now) &&
+                alt.reachableFrom(leave) &&
                 seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}'))
               alt.legs,
         ],
@@ -114,6 +115,11 @@ class TripVariants {
   final WalkCache? walks;
   final WalkPolicy policy;
   final DateTime Function() _clock;
+
+  /// When the journey is planned for: walks and rides start no sooner than
+  /// you set off ([PlanTime.leaveFrom]); arriving by a time, walking the
+  /// whole way arrives when the planned journey does.
+  final PlanTime when;
   final _slots = <_Slot>[];
   late List<int> _choice;
   late Itinerary _current;
@@ -282,7 +288,7 @@ class TripVariants {
     // Re-time walks around the rides and check every connection.
     var feasible = replaceable;
     final firstRide = legs.indexWhere((l) => l.transit);
-    final now = _clock();
+    final leave = when.leaveFrom(_clock());
     for (var j = 0; j < legs.length; j++) {
       final l = legs[j];
       if (l.transit) continue;
@@ -292,15 +298,17 @@ class TripVariants {
       } else if (j > 0) {
         legs[j] = l.movedTo(legs[j - 1].end);
       } else {
-        legs[j] = l.movedTo(now); // walking the whole way: leave now
+        // Walking the whole way: leave when you set off; arriving by a
+        // time, arrive when the planned journey would.
+        legs[j] = l.movedTo(when.arriveBy && when.time != null ? base.end.subtract(l.duration) : leave);
       }
     }
     for (var j = 1; j < legs.length; j++) {
       if (legs[j].transit && legs[j - 1].end.isAfter(legs[j].start)) feasible = false;
     }
-    // A walk that replaces the first ride can't start in the past.
+    // A walk that replaces the first ride can't start before you set off.
     if (legs.isNotEmpty && slotOf[0] != null && !legs[0].transit &&
-        legs[0].start.isBefore(now.subtract(const Duration(minutes: 1)))) {
+        legs[0].start.isBefore(leave.subtract(const Duration(minutes: 1)))) {
       feasible = false;
     }
 
