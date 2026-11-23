@@ -438,7 +438,10 @@ class ItineraryRow extends StatelessWidget {
                         ? (staysOnBoard(it)
                             ? context.l10n.itineraryStayOn(titleCase(legs.first.toName))
                             : context.l10n.itineraryGetOff(titleCase(legs.first.toName)))
-                        : context.l10n.itineraryLeave(inMinutes(context.l10n, it.start)),
+                        // Over an hour away a clock time reads better than "in 1081 min".
+                        : minutesUntil(it.start) > 60
+                            ? context.l10n.leaveAt(hm(it.start))
+                            : context.l10n.itineraryLeave(inMinutes(context.l10n, it.start)),
                 style: emphasized(context).titleMedium.copyWith(color: cs.onSurface)),
             const SizedBox(height: 2),
             times,
@@ -652,6 +655,7 @@ class _RouteTagChip extends StatelessWidget {
       RouteTag.leastWalking => (Icons.directions_walk_rounded, context.l10n.tagLeastWalking),
       RouteTag.onFoot => (Icons.directions_walk_rounded, context.l10n.tagFasterOnFoot),
       RouteTag.stayOnBoard => (Icons.event_seat_rounded, context.l10n.tagStayOnBoard),
+      RouteTag.leaveEarlier => (Icons.schedule_rounded, context.l10n.tagLeaveEarlier),
     };
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 3, 10, 3),

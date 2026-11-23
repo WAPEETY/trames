@@ -384,6 +384,7 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       // A missed journey is a row of its own, so the next buses of its
       // lines keep theirs (and their place in the section).
       sectionOf: (it) => it.missedConnection ? '${_journeyKind(it)}|missed' : _journeyKind(it),
+      when: _planWhen,
     );
     return [...groups.where((g) => !g.best.missedConnection), ...groups.where((g) => g.best.missedConnection)];
   }
@@ -827,6 +828,16 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
     });
     _drawNearbyStops();
     _refreshArea();
+  }
+
+  /// Minutes [it] sets off before the departure time chosen, or null
+  /// (leaving now, arriving by a time, or within the minute of slack every
+  /// bus gets, see [LegAlternative.reachableFrom]).
+  int? _leavesEarly(Itinerary it) {
+    final t = planTime;
+    if (t == null || planArriveBy) return null;
+    final minutes = t.difference(it.start).inMinutes;
+    return minutes > 1 ? minutes : null;
   }
 
   /// When the journeys are planned for (the time chosen, or leave now).
@@ -1642,7 +1653,14 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       p = _myLocation(here!);
     }
     _deselect();
-    setState(() => from = p);
+    setState(() {
+      from = p;
+      // On a bus you leave now: a chosen time doesn't apply.
+      if (p.onBoard != null) {
+        planTime = null;
+        planArriveBy = false;
+      }
+    });
     fromSearch.text = p.name;
     _drawEndpoints();
     if (to != null) _plan();
@@ -1957,7 +1975,11 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
       fromIsMyLocation: from.isMyLocation,
       fromSuggestions: (_, c) => _suggestions(c, isFrom: true),
       toSuggestions: (_, c) => _suggestions(c, isFrom: false),
-      planTime: PlanTime(time: planTime, arriveBy: planArriveBy),
+      planTime: _planWhen,
+      timeLocked: from.onBoard != null,
+      onTimeLocked: () => ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(content: Text(context.l10n.timeUnavailableOnBoard))),
       onOpen: () => sheet.animateTo(M3EBottomSheetValue.expanded),
       onPlanTimeChanged: (p) {
         setState(() {
@@ -2501,6 +2523,20 @@ class _HomePageState extends State<HomePage> with SingleTickerProviderStateMixin
             if (it.missedConnection || it.lateForFirstRide(DateTime.now())) ...[
               const SizedBox(height: 4),
               MissedWarning(it, live: _journeyKind(it) == 'live'),
+            ],
+                      // A bus swiped to that leaves before the time chosen: say so.
+            if (_leavesEarly(it) case final minutes?) ...[
+              const SizedBox(height: 4),
+              Row(children: [
+                Icon(Icons.schedule_rounded, size: 16, color: cs.tertiary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    context.l10n.leaveEarlierNote(hm(it.start), minutes),
+                    style: tt.labelLarge?.copyWith(color: cs.tertiary),
+                  ),
+                ),
+              ]),
             ],
           ]),
         ),

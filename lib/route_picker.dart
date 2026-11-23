@@ -28,6 +28,8 @@ class RoutePicker extends StatefulWidget {
     this.planTime = const PlanTime(),
     this.onPlanTimeChanged,
     this.onOpen,
+    this.timeLocked = false,
+    this.onTimeLocked,
     this.onSwap,
     this.onClear,
   });
@@ -45,6 +47,11 @@ class RoutePicker extends StatefulWidget {
 
   /// Opens the sheet fully, showing the "From" and time rows.
   final VoidCallback? onOpen;
+
+  /// On a bus: no time to choose. The bar shows no clock and the time row
+  /// is greyed out; tapping it calls [onTimeLocked] (to say why).
+  final bool timeLocked;
+  final VoidCallback? onTimeLocked;
   final VoidCallback? onSwap;
   final VoidCallback? onClear;
 
@@ -126,7 +133,7 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
                     trailing: Row(mainAxisSize: MainAxisSize.min, children: [
                       // Clock (or the chosen time) while collapsed: opens the
                       // sheet, then gives way to the time row and swap button.
-                      if (p < 0.95)
+                      if (p < 0.95 && !widget.timeLocked)
                         ClipRect(
                           child: Align(
                             alignment: Alignment.centerLeft,
@@ -226,8 +233,15 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
 
   Widget _timeRow() {
     final cs = Theme.of(context).colorScheme;
+    final locked = widget.timeLocked;
+    // Disabled content: onSurface at 38% (M3).
+    final disabled = cs.onSurface.withValues(alpha: 0.38);
     return InkWell(
       onTap: () async {
+        if (locked) {
+          widget.onTimeLocked?.call();
+          return;
+        }
         final picked = await showPlanTimeDialog(context, widget.planTime);
         if (picked != null && mounted) widget.onPlanTimeChanged?.call(picked);
       },
@@ -235,7 +249,7 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
         height: 48,
         child: Row(children: [
           const SizedBox(width: 16),
-          Icon(Icons.schedule_rounded, color: cs.onSurfaceVariant),
+          Icon(Icons.schedule_rounded, color: locked ? disabled : cs.onSurfaceVariant),
           const SizedBox(width: 16),
           Expanded(
             child: Text(
@@ -243,11 +257,15 @@ class _RoutePickerState extends State<RoutePicker> with SingleTickerProviderStat
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: Theme.of(context).textTheme.bodyLarge?.copyWith(
-                    color: widget.planTime.time == null ? cs.onSurfaceVariant : cs.onSurface,
+                    color: locked
+                        ? disabled
+                        : widget.planTime.time == null
+                            ? cs.onSurfaceVariant
+                            : cs.onSurface,
                   ),
             ),
           ),
-          Icon(Icons.arrow_drop_down_rounded, color: cs.onSurfaceVariant),
+          Icon(Icons.arrow_drop_down_rounded, color: locked ? disabled : cs.onSurfaceVariant),
           const SizedBox(width: 16),
         ]),
       ),

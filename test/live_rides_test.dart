@@ -187,6 +187,18 @@ void main() {
       expect(rides(strict({'e': 21})), '66@37 3NAV@66'); // 16 sooner: leave later
     });
 
+    test('planning to leave later: an earlier bus is never taken for you', () {
+      // You chose to leave at 36 (now 20). The on-time 66 at 25 arrives the
+      // same: leaving now it would be taken, but it means leaving before 36.
+      final onTime = LegAlternative([_walk(24, 25), _ride('66', 'e', 25, 48), _walk(48, 50)]);
+      final it = trip(first: [onTime]);
+      final r = applyLiveTimes(it, _live({}), clock: () => now, earlier: true, when: PlanTime(time: _m(36)));
+      expect(rides(r), '66@37 3NAV@66');
+      // Still there to swipe to.
+      final v = TripVariants(it, clock: () => now, when: PlanTime(time: _m(36)));
+      expect(v.variantCount(0), 2);
+    });
+
     test('another line doing the same stretch: taken too', () {
       final early60 = LegAlternative([_walk(8, 9), _ride('60', 'e', 9, 32), _walk(32, 34)]);
       final r = list(trip(first: [early60], second: [bus19(50)]), {'e': 21});
@@ -339,6 +351,12 @@ void main() {
     });
     test('another run of the line (timetable far from the planner\'s) is ignored', () {
       expect(liveRideFor(_from('B', 'C', 25, 55), _tripOf(late: 6)), isNull);
+    });
+    test('the same trip tomorrow (a journey planned for then) never takes today\'s live times', () {
+      // Same trip id and stops, 24 hours later: today's run is not its run.
+      final tomorrow = _from('A', 'B', 24 * 60 + 4, 24 * 60 + 10);
+      expect(liveRideFor(tomorrow, _tripOf(late: 3)), isNull);
+      expect(liveRideFor(tomorrow, _tripOf(late: 3, busSeq: 3)), isNull); // not "gone" either
     });
   });
 

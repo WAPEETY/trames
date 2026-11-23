@@ -48,11 +48,15 @@ class RankPolicy {
 
   /// Ranking time of [it]: its arrival plus the cost of its changes.
   DateTime score(Itinerary it) => it.end.add(penalty(it.duration) * it.transfers);
+
+  /// The mirror, arriving by a time: its departure minus the cost of its
+  /// changes (later ranks first).
+  DateTime scoreLeaving(Itinerary it) => it.start.subtract(penalty(it.duration) * it.transfers);
 }
 
 const kRankPolicy = RankPolicy();
 
-enum RouteTag { fastest, fewestChanges, leastWalking, onFoot, stayOnBoard }
+enum RouteTag { fastest, fewestChanges, leastWalking, onFoot, stayOnBoard, leaveEarlier }
 
 /// All departures of one line sequence, earliest arrival first.
 class RouteGroup {
@@ -164,7 +168,13 @@ class RouteSearch {
   Future<List<RouteGroup>> _finish(List<Itinerary> raw, LatLng to, String toName,
       {OnBoardTrip? riding, PlanTime when = const PlanTime()}) async {
     final rides = [for (final it in raw) ...it.transitLegs];
-    var all = [for (final it in raw) trimAlternatives(it, rides: rides)];
+    var all = [
+      for (final it in raw) ...[
+        trimAlternatives(it, rides: rides),
+        // The same rules for their other rides as for every journey.
+        for (final split in splitFarAlternatives(it, when: when)) trimAlternatives(split, rides: rides),
+      ],
+    ];
     final cache = walks, details = trips;
     if (cache != null) all = await applyWalkRules(all, when: when);
     if (cache != null && details != null) {
@@ -180,7 +190,7 @@ class RouteSearch {
         walkSpeed: walkingSpeedKmh / 3.6,
       );
     }
-    return group(all);
+    return group(all, when: when);
   }
 
   /// Keeps only alternatives that board and get off near the planned ride's
@@ -189,6 +199,61 @@ class RouteSearch {
   /// and only its live time tells (see [applyLiveTimes]; [TripVariants]
   /// offers a ride only while it can be reached).
   ///
+  /// Alternatives [trimAlternatives] leaves out because they board too far
+  /// from the ride's stop (e.g. the 88 from Verano for the 19L from Reti,
+  /// 354 m apart) are other ways to go, not mistakes: never thrown away,
+  /// they become journeys of their own. Per ride, those boarding near each
+  /// other make one journey: the ride swapped for one of them (the rest of
+  /// the trip as planned), the others its alternatives to swipe to. Its
+  /// ride is the one arriving first, then leaving latest, among those you
+  /// don't have to leave before [when]'s time for (any, when none is).
+  /// Those alighting far are still left out for now.
+  List<Itinerary> splitFarAlternatives(Itinerary it, {PlanTime when = const PlanTime()}) {
+    final max = policy.maxAlternativeStopDistanceMeters;
+    bool near(LatLng a, LatLng b) => distanceMeters(a, b) <= max;
+    final now = _clock(), leave = when.leaveFrom(now);
+    final out = <Itinerary>[];
+    for (final (i, l) in it.legs.indexed) {
+      if (!l.transit || l.onBoard) continue;
+      final far = [
+        for (final a in l.alternatives)
+          if (!near(a.ride.from, l.from) && near(a.ride.to, l.to) && a.reachableFrom(now)) a,
+      ];
+      // Boarding near each other: one journey.
+      final clusters = <List<LegAlternative>>[];
+      for (final a in far) {
+        final c = clusters.where((c) => near(c.first.ride.from, a.ride.from)).firstOrNull;
+        if (c == null) {
+          clusters.add([a]);
+        } else {
+          c.add(a);
+        }
+      }
+      // The span the alternatives replace: the ride and the walks around it.
+      final start = i > 0 && !it.legs[i - 1].transit ? i - 1 : i;
+      final end = i + 1 < it.legs.length && !it.legs[i + 1].transit ? i + 1 : i;
+      for (final c in clusters) {
+        final onTime = c.where((a) => a.reachableFrom(leave)).toList();
+        // With a ride after it they all arrive with that ride: the latest
+        // to leave wins. Replacing the last ride, the first to arrive.
+        DateTime arrives(LegAlternative a) => end + 1 < it.legs.length ? it.end : a.legs.last.end;
+        final pick = (onTime.isEmpty ? c : onTime).reduce((a, b) {
+          final x = arrives(a).compareTo(arrives(b));
+          if (x != 0) return x < 0 ? a : b;
+          return a.legs.first.start.isBefore(b.legs.first.start) ? b : a;
+        });
+        final others = [for (final a in c) if (!identical(a, pick)) a];
+        final legs = [
+          ...it.legs.sublist(0, start),
+          for (final x in pick.legs) x.transit ? x.withAlternatives(others) : x,
+          ...it.legs.sublist(end + 1),
+        ];
+        out.add(Itinerary(start: legs.first.start, end: legs.last.end, legs: legs, transfers: it.transfers));
+      }
+    }
+    return out;
+  }
+
   /// Rule 1: right after a ride on line X, an alternative on X is pointless
   /// when [rides] (every ride of every journey found) include a direct X
   /// from that ride's boarding stop to this leg's destination: staying on
@@ -308,7 +373,12 @@ class RouteSearch {
   /// scheduled, by how sure its buses' times are): a row only holds
   /// journeys of one section, so every option you swipe to belongs where
   /// the row is.
-  List<RouteGroup> group(Iterable<Itinerary> all, {String Function(Itinerary)? sectionOf}) {
+  ///
+  /// Arriving by a time ([when]) the order is the mirror: the journey that
+  /// lets you leave latest first, and "fastest" is the shortest one.
+  List<RouteGroup> group(Iterable<Itinerary> all,
+      {String Function(Itinerary)? sectionOf, PlanTime when = const PlanTime()}) {
+    final order = when.arriveBy ? _byDeparture : _byArrival;
     final now = _clock().subtract(const Duration(minutes: 1));
     final unique = <String, Itinerary>{};
     for (var it in all) {
@@ -340,7 +410,7 @@ class RouteSearch {
     // 19BUS and 60 › 3BUS, when the 3BUS is an alternative of the 19BUS) show
     // the same split pill: one route, its earliest departure first.
     final merged = <List<Itinerary>>[];
-    for (final g in groups.values.map((v) => v..sort(_byArrival)).toList()..sort((a, b) => _byArrival(a.first, b.first))) {
+    for (final g in groups.values.map((v) => v..sort(order)).toList()..sort((a, b) => order(a.first, b.first))) {
       final same = g.first.walkOnly
           ? null
           : merged
@@ -354,23 +424,28 @@ class RouteSearch {
       } else {
         same
           ..addAll(g)
-          ..sort(_byArrival);
+          ..sort(order);
       }
     }
     final result = [
       for (final m in merged) RouteGroup(m.first.signature, m.take(m.first.walkOnly ? 1 : maxPerGroup).toList()),
-    ]..sort((a, b) => _byArrival(a.best, b.best));
+    ]..sort((a, b) => order(a.best, b.best));
     if (result.isEmpty) return result;
 
     // Tags describe the journeys listed normally that can be made.
     final shown = result.where((g) => g.hiddenBecause == null && !g.best.missedConnection).toList();
-    shown.firstOrNull?.tags.add(RouteTag.fastest);
+    // Leaving now or at a time, the fastest arrives first (the first one);
+    // arriving by a time, it is the shortest.
+    RouteGroup? fastestOf(List<RouteGroup> gs) => !when.arriveBy || gs.isEmpty
+        ? gs.firstOrNull
+        : gs.reduce((a, b) => b.best.duration < a.best.duration ? b : a);
+    fastestOf(shown)?.tags.add(RouteTag.fastest);
     final transit = shown.where((g) => !g.isWalk).toList();
     if (transit.isNotEmpty) {
       // Every route that has the fewest changes (or the least walking) says
       // so, when that's better than the fastest route: otherwise one route
       // with one bus would go untagged while another with two had the tag.
-      final fastestTransit = transit.first;
+      final fastestTransit = fastestOf(transit)!;
       void tagMin(RouteTag tag, int Function(Itinerary) f) {
         final least = transit.map((g) => f(g.best)).reduce((a, b) => a < b ? a : b);
         if (least >= f(fastestTransit.best)) return;
@@ -383,11 +458,23 @@ class RouteSearch {
       tagMin(RouteTag.leastWalking, (it) => it.walkMinutes);
     }
 
+    // A row with no bus at or after the departure chosen: going that way
+    // means leaving sooner (otherwise its row starts from a later bus).
+    final chosen = when.time;
+    if (chosen != null && !when.arriveBy) {
+      for (final g in result) {
+        if (g.best.start.isBefore(chosen.subtract(const Duration(minutes: 1)))) g.tags.add(RouteTag.leaveEarlier);
+      }
+    }
+
     // Order by arrival + the cost of changes (tags above stay on the
-    // truly fastest / fewest-changes routes).
+    // truly fastest / fewest-changes routes); arriving by a time, by
+    // departure - the cost of changes, latest first.
     result.sort((a, b) {
-      final c = rank.score(a.best).compareTo(rank.score(b.best));
-      return c != 0 ? c : _byArrival(a.best, b.best);
+      final c = when.arriveBy
+          ? rank.scoreLeaving(b.best).compareTo(rank.scoreLeaving(a.best))
+          : rank.score(a.best).compareTo(rank.score(b.best));
+      return c != 0 ? c : order(a.best, b.best);
     });
 
     // Rule 2: walking the whole way, suggested first when about as fast.
@@ -434,6 +521,12 @@ class RouteSearch {
   static int _byArrival(Itinerary a, Itinerary b) {
     final c = a.end.compareTo(b.end);
     return c != 0 ? c : b.start.compareTo(a.start); // same arrival: leave later
+  }
+
+  /// Arriving by a time: leave latest first; same departure, arrive first.
+  static int _byDeparture(Itinerary a, Itinerary b) {
+    final c = b.start.compareTo(a.start);
+    return c != 0 ? c : a.end.compareTo(b.end);
   }
 
   /// Between two versions of the same trip prefer less walking, then later departure.

@@ -18,6 +18,8 @@
   "dayToday": "oggi",
   "dayTomorrow": "domani",
   "chipBy": "entro {when}",
+  "timeUnavailableOnBoard": "Non disponibile mentre sei a bordo di un mezzo",
+  "leaveEarlierNote": "Esci alle {time}, {minutes} min prima dell'ora scelta",
   "changeDay": "Cambia giorno",
   "resetToNow": "Adesso",
   "cancel": "Annulla",
@@ -47,6 +49,7 @@
   "routeSectionScheduled": "Da orario",
   "routeSectionPredicted": "Previsti",
 
+  "tagLeaveEarlier": "Partendo un po' prima",
   "tagFastest": "Più veloce",
   "tagFewestChanges": "Meno cambi",
   "tagLeastWalking": "Meno a piedi",

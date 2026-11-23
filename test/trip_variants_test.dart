@@ -49,7 +49,7 @@ void main() {
   test('swapping the last ride moves the arrival', () {
     final alt = LegAlternative([_walk(10, 13), _ride('61', 'd', 14, 36), _walk(36, 41)]);
     final v = TripVariants(clock: () => _t0, base(second: [alt]));
-    v.choose(1, 1);
+    v.choose(1, 0); // the 61 at 14 comes before the 60 at 15
     expect(v.current.legs.map((l) => l.routeShortName ?? 'walk'), ['walk', '88', 'walk', '61', 'walk']);
     expect(v.current.end, _m(41));
   });
@@ -59,9 +59,9 @@ void main() {
     final late3 = LegAlternative([_walk(4, 6), _ride('3', 'c', 7, 14), _walk(14, 17)]);
     final early61 = LegAlternative([_walk(10, 12), _ride('61', 'd', 13, 35), _walk(35, 38)]);
     final v = TripVariants(clock: () => _t0, base(first: [late3], second: [early61]));
-    expect(v.choose(1, 1), isTrue);
+    expect(v.choose(1, 0), isTrue); // the 61 at 13, before the 60 at 15
     expect(v.choose(0, 1), isFalse); // can't keep the 61
-    expect(v.choiceOf(1), 0);
+    expect(v.choiceOf(1), 1); // back on the 60
     expect(v.current.legs.map((l) => l.routeShortName ?? 'walk'), ['walk', '3', 'walk', '60', 'walk']);
   });
 
@@ -75,14 +75,29 @@ void main() {
     expect(v.rideOf(0, 2).tripId, 'e');
   });
 
-  test('leaving at a later time, alternatives before it are not offered', () {
-    // Now is 8:00, you leave at 8:06: as if it were 8:06.
-    final gone = LegAlternative([_walk(3, 5), _ride('3', 'c', 5, 11), _walk(11, 14)]);
-    final missed = LegAlternative([_walk(5, 7), _ride('3', 'd', 7, 12), _walk(12, 14)]);
+  test('a ride\'s buses are in departure order, the planner\'s own chosen', () {
+    final later = LegAlternative([_walk(7, 9), _ride('3', 'e', 9, 12), _walk(12, 14)]);
+    final sooner = LegAlternative([_walk(0, 2), _ride('19', 'c', 2, 9), _walk(9, 12)]);
+    final v = TripVariants(base(first: [later, sooner]), clock: () => _t0);
+    expect([for (var k = 0; k < v.variantCount(0); k++) v.rideOf(0, k).tripId], ['c', 'a', 'e']);
+    expect(v.choiceOf(0), 1);
+    expect(v.defaults[0], 1);
+    expect(v.current.transitLegs.first.tripId, 'a');
+  });
+
+  test('leaving at a later time, buses before it are offered, to the left, never chosen', () {
+    // Now is 8:00, you said 8:06; the planner's ride (walk 8:00, 88 at 8:04)
+    // was found for it. A 3 at 8:05 needs you out at 8:03; one at 8:09 doesn't.
+    final early = LegAlternative([_walk(3, 5), _ride('3', 'c', 5, 11), _walk(11, 14)]);
     final ok = LegAlternative([_walk(7, 9), _ride('3', 'e', 9, 12), _walk(12, 14)]);
-    final v = TripVariants(base(first: [gone, missed, ok]), clock: () => _t0, when: PlanTime(time: _m(6)));
-    expect(v.variantCount(0), 3);
-    expect(v.rideOf(0, 2).tripId, 'e');
+    final v = TripVariants(base(first: [ok, early]), clock: () => _t0, when: PlanTime(time: _m(6)));
+    expect([for (var k = 0; k < v.variantCount(0); k++) v.rideOf(0, k).tripId], ['a', 'c', 'e']);
+    expect(v.choiceOf(0), 0); // the planner's, as found
+    expect(v.beforeLeave(0, 1), isTrue);
+    expect(v.beforeLeave(0, 2), isFalse);
+    // Buses already gone (before now) stay out.
+    final gone = TripVariants(base(first: [early]), clock: () => _m(6), when: PlanTime(time: _m(8)));
+    expect(gone.variantCount(0), 1);
   });
 
   test('arriving by a time, any alternative still ahead of now is offered', () {

@@ -8,9 +8,10 @@ import 'walk_rules.dart';
 ///
 /// Every transit leg of the base itinerary is a *slot*. A slot's *span* is the
 /// ride plus the walks right before and after it. Its ride variants are the
-/// original span, then the span's [Leg.alternatives] (each `[walk, ride,
-/// walk]`); last, when the span is short enough, comes *walking*: one walk
-/// from where the span starts to where it ends.
+/// original span and the span's [Leg.alternatives] (each `[walk, ride,
+/// walk]`), by departure, the original chosen by default; last, when the
+/// span is short enough, comes *walking*: one walk from where the span
+/// starts to where it ends.
 ///
 /// Rides of [WalkPolicy.hideRidesUpTo] or less are never offered. A slot whose
 /// own ride is that short starts on walking (or its first other ride); with
@@ -40,7 +41,11 @@ class TripVariants {
     DateTime Function()? clock,
     this.when = const PlanTime(),
   }) : _clock = clock ?? DateTime.now {
-    final leave = when.leaveFrom(_clock());
+    // Rides to swap to: any you can still catch from now. Planning for
+    // later, those before the time chosen are offered too (you choose to
+    // leave sooner) but never picked for you (see [beforeLeave]).
+    final now = _clock();
+    _leave = when.leaveFrom(now);
     for (var i = 0; i < base.legs.length; i++) {
       final leg = base.legs[i];
       if (!leg.transit) continue;
@@ -51,26 +56,39 @@ class TripVariants {
       // The ride you're on can't be swapped, walked or hidden.
       final pinned = leg.onBoard;
       bool keep(Leg ride) => pinned || ride.duration > policy.hideRidesUpTo;
+      final own = keep(leg) ? base.legs.sublist(start, end + 1) : null;
+      final rides = [
+        ?own,
+        for (final alt in leg.alternatives)
+          if (!pinned &&
+              keep(alt.ride) &&
+              alt.reachableFrom(now) &&
+              seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}'))
+            alt.legs,
+      ];
+      // By departure: swiping left is sooner, right later (ties keep the
+      // planner's order). Walking stays last.
+      DateTime departs(List<Leg> v) => v.firstWhere((l) => l.transit).start;
+      final order = [for (var k = 0; k < rides.length; k++) k]
+        ..sort((a, b) {
+          final c = departs(rides[a]).compareTo(departs(rides[b]));
+          return c != 0 ? c : a.compareTo(b);
+        });
+      final sorted = [for (final k in order) rides[k]];
       _slots.add(_Slot(
         start,
         end,
-        [
-          if (keep(leg)) base.legs.sublist(start, end + 1),
-          for (final alt in leg.alternatives)
-            if (!pinned &&
-                keep(alt.ride) &&
-                alt.reachableFrom(leave) &&
-                seen.add(alt.ride.tripId ?? '${alt.line}@${alt.ride.start}'))
-              alt.legs,
-        ],
+        sorted,
+        own: own == null ? null : sorted.indexOf(own),
         walkable: !pinned && walks != null && distanceMeters(from, to) / 1000 <= policy.maxWalkKm,
         hidden: !keep(leg),
       ));
     }
     // Default per slot: the original ride; for a hidden one walking, else
-    // the first other ride.
+    // the first other ride you don't have to leave sooner for.
     defaults = [
-      for (final slot in _slots) slot.hidden && slot.walkable ? slot.variants.length : 0,
+      for (var s = 0; s < _slots.length; s++)
+        _slots[s].hidden && _slots[s].walkable ? _slots[s].variants.length : _slots[s].own ?? _firstOnTime(s),
     ];
     impossible = _slots.any((s) => s.variants.isEmpty && !s.walkable);
     _choice = [
@@ -91,7 +109,7 @@ class TripVariants {
       if (!_compose()) {
         // A hidden ride's walk doesn't fit: try its first other ride.
         for (var s = 0; s < _slots.length; s++) {
-          if (_slots[s].hidden && _slots[s].variants.isNotEmpty) _choice[s] = 0;
+          if (_slots[s].hidden && _slots[s].variants.isNotEmpty) _choice[s] = _firstOnTime(s);
         }
         _compose();
       }
@@ -120,6 +138,21 @@ class TripVariants {
   /// you set off ([PlanTime.leaveFrom]); arriving by a time, walking the
   /// whole way arrives when the planned journey does.
   final PlanTime when;
+  late final DateTime _leave;
+
+  /// Whether ride [variant] of [slot] means leaving before the time chosen
+  /// (only planning for later): offered to swipe to, never picked for you.
+  bool beforeLeave(int slot, int variant) =>
+      !isWalk(slot, variant) && !LegAlternative(_slots[slot].variants[variant]).reachableFrom(_leave);
+
+  int _firstOnTime(int slot) {
+    final n = _slots[slot].variants.length;
+    for (var v = 0; v < n; v++) {
+      if (!beforeLeave(slot, v)) return v;
+    }
+    return 0;
+  }
+
   final _slots = <_Slot>[];
   late List<int> _choice;
   late Itinerary _current;
@@ -288,7 +321,7 @@ class TripVariants {
     // Re-time walks around the rides and check every connection.
     var feasible = replaceable;
     final firstRide = legs.indexWhere((l) => l.transit);
-    final leave = when.leaveFrom(_clock());
+    final leave = _leave;
     for (var j = 0; j < legs.length; j++) {
       final l = legs[j];
       if (l.transit) continue;
@@ -333,14 +366,17 @@ class TripVariants {
 }
 
 class _Slot {
-  _Slot(this.start, this.end, this.variants, {required this.walkable, required this.hidden});
+  _Slot(this.start, this.end, this.variants, {this.own, required this.walkable, required this.hidden});
 
   /// Index range in the base itinerary that a variant replaces (inclusive).
   final int start;
   final int end;
 
-  /// Ride variants (0 = original); walking, when [walkable], comes after.
+  /// Ride variants by departure; walking, when [walkable], comes after.
   final List<List<Leg>> variants;
+
+  /// Index of the original ride among [variants] (null when [hidden]).
+  final int? own;
   final bool walkable;
 
   /// The original ride is too short to offer (not among [variants]).

@@ -151,9 +151,14 @@ Itinerary applyLiveTimes(
     return rideCount(slot) == 0 ? tv.slotRide(slot) : tv.rideOf(slot, c);
   }
 
-  /// Walking instead of a ride is only tried within the walk the user
-  /// accepts ([WalkPolicy.maxRideWalk]); a walk the journey already had stays.
+  /// What the rules may switch to: what the journey has now always; never
+  /// a bus before the time you chose to leave (only you pick that, by
+  /// swiping); walking only within the walk the user accepts
+  /// ([WalkPolicy.maxRideWalk]); a walk the journey already had stays.
+  final had = tv.choices;
   bool allowed(int slot, int variant) {
+    if (variant == had[slot]) return true;
+    if (tv.beforeLeave(slot, variant)) return false;
     if (!tv.isWalk(slot, variant) || it.walkSlots.contains(slot)) return true;
     final cap = policy.maxRideWalk;
     return cap == null || tv.walkDurationOf(slot) <= cap;
@@ -219,7 +224,7 @@ Itinerary applyLiveTimes(
           tv.choiceOf(s),
           if (chosen(s) case final ride? when !ride.onBoard)
             for (var v = 0; v < rideCount(s); v++)
-              if (v != tv.choiceOf(s) && sure(tv.rideOf(s, v)) > sure(ride)) v,
+              if (v != tv.choiceOf(s) && allowed(s, v) && sure(tv.rideOf(s, v)) > sure(ride)) v,
         ],
     ];
     if (options.every((o) => o.length == 1)) return;
@@ -244,7 +249,7 @@ Itinerary applyLiveTimes(
       if (ride == null || ride.onBoard) continue;
       final sooner = [
         for (var v = 0; v < rideCount(s); v++)
-          if (tv.rideOf(s, v).start.isBefore(ride.start)) v,
+          if (tv.rideOf(s, v).start.isBefore(ride.start) && allowed(s, v)) v,
       ];
       if (sooner.isEmpty) continue;
       final options = [

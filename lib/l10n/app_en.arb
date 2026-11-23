@@ -20,6 +20,9 @@
   "dayTomorrow": "tomorrow",
   "chipBy": "by {when}",
   "@chipBy": {"description": "Collapsed bar chip for an arrival time. when is a time, optionally after a day (tomorrow 14:59, Wed 25 14:59)."},
+  "timeUnavailableOnBoard": "Not available while you're on board",
+  "leaveEarlierNote": "Leave at {time}, {minutes} min before the time you chose",
+  "@leaveEarlierNote": {"placeholders": {"time": {"type": "String"}, "minutes": {"type": "int"}}},
   "changeDay": "Change day",
   "resetToNow": "Now",
   "cancel": "Cancel",
@@ -54,6 +57,7 @@
   "routeSectionScheduled": "Scheduled",
   "routeSectionPredicted": "Predicted",
 
+  "tagLeaveEarlier": "Leaving a bit earlier",
   "tagFastest": "Fastest",
   "tagFewestChanges": "Fewest changes",
   "tagLeastWalking": "Least walking",

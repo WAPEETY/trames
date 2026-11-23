@@ -54,6 +54,38 @@ void main() {
     expect(_order([_it('A', 0, 30, 2), _it('D', 0, 36, 1)]), ['A0', 'D0']);
   });
 
+  group('arriving by a time: the mirror', () {
+    List<RouteGroup> grouped(List<Itinerary> its) =>
+        RouteSearch(_NoPlanner(), clock: () => _t0).group(its, when: PlanTime(time: _m(60), arriveBy: true));
+
+    test('the journey that leaves latest comes first', () {
+      // A: 12:00 -> 12:30. B: 12:10 -> 12:40. Both arrive by 13:00.
+      expect(_order([_it('A', 0, 30, 1), _it('B', 10, 40, 1)]), ['A0', 'B0']); // leaving: arrive first
+      expect(grouped([_it('A', 0, 30, 1), _it('B', 10, 40, 1)]).map((g) => g.signature), ['B0', 'A0']);
+    });
+
+    test('a change costs as much: leaving a little later with one more change ranks after', () {
+      // A direct 12:10 -> 12:40. B with a change 12:12 -> 12:42 (3 min off): 12:09.
+      expect(grouped([_it('A', 10, 40, 1), _it('B', 12, 42, 2)]).first.signature, 'A0');
+    });
+
+    test('runs of one route: the later one is shown, the earlier a swipe away', () {
+      Itinerary run(int start) => Itinerary(start: _m(start), end: _m(start + 20), transfers: 0, legs: [
+            Leg(mode: 'BUS', transit: true, start: _m(start), end: _m(start + 20), fromName: '', toName: '',
+                from: _p, to: _p, points: const [], distanceMeters: 0, routeShortName: '60', tripId: 'r$start'),
+          ]);
+      final g = grouped([run(0), run(15), run(30)]).single;
+      expect(g.options.map((it) => it.start), [_m(30), _m(15), _m(0)]);
+    });
+
+    test('"fastest" is the shortest journey', () {
+      // A: 30 min. B: 40 min, leaves later (first in the list).
+      final groups = grouped([_it('A', 0, 30, 1), _it('B', 10, 50, 1)]);
+      expect(groups.first.signature, 'B0');
+      expect(groups.firstWhere((g) => g.tags.contains(RouteTag.fastest)).signature, 'A0');
+    });
+  });
+
   test('Fastest tag stays on the earliest arrival', () {
     final groups = RouteSearch(_NoPlanner(), clock: () => _t0).group([_it('A', 0, 30, 3), _it('B', 0, 31, 2)]);
     expect(groups.firstWhere((g) => g.tags.contains(RouteTag.fastest)).signature, startsWith('A0'));
